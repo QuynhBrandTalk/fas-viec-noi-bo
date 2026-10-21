@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+*.age
+*.dump
+*.sha256
+backups/
+node_modules/

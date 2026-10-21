@@ -1,0 +1,77 @@
+name: viec-app
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+    depends_on:
+      web:
+        condition: service_healthy
+
+  web:
+    build: ./app
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - edge
+      - viec_internal
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - viec_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backup:
+    build:
+      context: .
+      dockerfile: backup/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./docs:/docs
+    networks:
+      - edge
+      - viec_internal
+    depends_on:
+      db:
+        condition: service_healthy
+
+networks:
+  edge:
+  viec_internal:
+    name: viec_internal
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
