@@ -59,6 +59,7 @@ services:
     volumes:
       - ./scripts:/scripts:ro
       - ./docs:/docs
+      - ./secrets:/run/secrets:ro
     networks:
       - edge
       - viec_internal
