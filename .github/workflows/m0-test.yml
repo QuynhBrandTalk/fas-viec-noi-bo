@@ -65,6 +65,11 @@ jobs:
       - name: Kiểm tra qua Caddy (HTTPS nội bộ)
         run: curl -fsk https://localhost/healthz
 
+      - name: Chẩn đoán phản hồi R2 (tạm thời)
+        continue-on-error: true
+        run: |
+          docker compose run --rm backup sh -c 'echo hello > /tmp/diag.txt && rclone copy /tmp/diag.txt dest:viec-backups-staging/ -vv --dump bodies 2>&1 | grep -iE "<Code>|<Message>|Error|Status|rclone|x-amz|Authorization|Content-Length|PUT|HTTP/" | head -80' || true
+
       - name: Kiểm tra đích sao lưu R2 (ghi, đọc, xoá)
         run: docker compose run --rm backup /scripts/check-target.sh
 
