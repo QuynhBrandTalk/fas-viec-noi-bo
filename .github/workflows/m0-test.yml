@@ -1,4 +1,4 @@
-name: M0 kiểm thử tự động
+name: M0 và M1 kiểm thử tự động
 
 on:
   push:
@@ -6,19 +6,47 @@ on:
   workflow_dispatch:
 
 jobs:
-  m0:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      R2_ENDPOINT: ${{ secrets.BACKUP_ENDPOINT }}
+      R2_ACCESS_KEY: ${{ secrets.BACKUP_ACCESS_KEY }}
+      R2_SECRET_KEY: ${{ secrets.BACKUP_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Tạo .env chỉ dùng cho kiểm thử
+      - name: Cài age
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+
+      - name: Tạo .env và khoá age tạm cho lần kiểm thử
         run: |
           cp .env.example .env
-          sed -i 's/^APP_DOMAIN=.*/APP_DOMAIN=localhost/' .env
-          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-test-password-123/' .env
-          sed -i 's#^DATABASE_URL=.*#DATABASE_URL=postgres://viec:ci-test-password-123@db:5432/viec#' .env
-          sed -i 's/^SESSION_SECRET=.*/SESSION_SECRET=ci-test-secret-0123456789abcdefghijklmnop/' .env
+          mkdir -p secrets
+          PUB="$(age-keygen -o secrets/age.key 2>&1 | sed -n 's/^Public key: //p')"
+          {
+            echo "APP_DOMAIN=localhost"
+            echo "POSTGRES_USER=viec"
+            echo "POSTGRES_PASSWORD=ci-test-password-123"
+            echo "POSTGRES_DB=viec"
+            echo "DATABASE_URL=postgres://viec:ci-test-password-123@db:5432/viec"
+            echo "SESSION_SECRET=ci-test-secret-0123456789abcdefghijklmnop"
+            echo "SMTP_HOST=localhost"
+            echo "SMTP_PORT=25"
+            echo "SMTP_USER=ci"
+            echo "SMTP_PASS=ci"
+            echo "SMTP_FROM=ci@localhost"
+            echo "ALERT_EMAIL=ops@localhost"
+            echo "BACKUP_AGE_PUBLIC_KEY=$PUB"
+            echo "BACKUP_TYPE=s3"
+            echo "BACKUP_PROVIDER=Cloudflare"
+            echo "BACKUP_ENDPOINT=$R2_ENDPOINT"
+            echo "BACKUP_ACCESS_KEY=$R2_ACCESS_KEY"
+            echo "BACKUP_SECRET_KEY=$R2_SECRET_KEY"
+            echo "BACKUP_BUCKET=viec-backups-staging"
+            echo "RESTORE_TOLERANCE_PERCENT=1"
+          } >> .env
+          echo "Đã tạo .env"
 
       - name: Build và chạy các container
         run: docker compose up -d --build
@@ -36,6 +64,12 @@ jobs:
 
       - name: Kiểm tra qua Caddy (HTTPS nội bộ)
         run: curl -fsk https://localhost/healthz
+
+      - name: Kiểm tra đích sao lưu R2 (ghi, đọc, xoá)
+        run: docker compose run --rm backup /scripts/check-target.sh
+
+      - name: Chạy sao lưu thử lên R2
+        run: docker compose run --rm backup /scripts/backup.sh
 
       - name: Trạng thái cuối
         if: always()
