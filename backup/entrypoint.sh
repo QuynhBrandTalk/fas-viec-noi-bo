@@ -18,8 +18,8 @@ case "$BACKUP_TYPE" in
     # Tương thích R2: region "auto", tắt checksum tự động (rclone mới gửi trailer làm R2 trả 400),
     # không kiểm tra bucket khi ghi.
     export RCLONE_CONFIG_DEST_REGION=auto
-    export RCLONE_CONFIG_DEST_DISABLE_CHECKSUM=true
-    export RCLONE_CONFIG_DEST_NO_CHECK_BUCKET=true
+    export RCLONE_S3_DISABLE_CHECKSUM=true
+    export RCLONE_S3_NO_CHECK_BUCKET=true
     ;;
   sftp)
     export RCLONE_CONFIG_DEST_TYPE=sftp
@@ -56,7 +56,7 @@ for v in \
   printf 'export %s=%q\n' "$v" "${!v-}" >> "$ENV_FILE"
 done
 # Tất cả biến cấu hình rclone của remote "dest" (tự động theo loại đích đã chọn)
-for v in $(compgen -v RCLONE_CONFIG_DEST_); do
+for v in $(compgen -v RCLONE_CONFIG_DEST_) $(compgen -v RCLONE_S3_); do
   printf 'export %s=%q\n' "$v" "${!v}" >> "$ENV_FILE"
 done
 
