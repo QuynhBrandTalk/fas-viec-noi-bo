@@ -1,33 +1,39 @@
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { loginWithUserId } from '@/app/actions/auth'
-
-interface Props {
-  searchParams: { uid?: string }
-}
+import { verifyNonce, NONCE_COOKIE_NAME } from '@/lib/auth-nonce'
 
 /**
- * /auth/callback?uid=...
+ * /auth/callback
  *
- * Intermediate page: nhận userId từ query param (đã được verify bởi
- * /api/auth/verify), gọi Server Action để tạo NextAuth session.
+ * Đọc signed nonce cookie do /api/auth/verify set, verify chữ ký + expiry,
+ * rồi gọi Server Action để tạo NextAuth session.
  *
- * Không render UI — chỉ là điểm chuyển tiếp để signIn() chạy
- * trong Server Action context (NextAuth v5 requirement).
+ * Không nhận uid từ URL (tránh forge). Cookie là bằng chứng rằng
+ * magic link đã được verify thành công trong 60 giây vừa rồi.
  */
-export default async function AuthCallbackPage({ searchParams }: Props) {
-  const uid = searchParams.uid
+export default async function AuthCallbackPage() {
+  const cookieStore = cookies()
+  const nonceCookie = cookieStore.get(NONCE_COOKIE_NAME)
 
-  if (!uid) {
-    redirect('/dang-nhap?error=' + encodeURIComponent('Phiên đăng nhập không hợp lệ.'))
+  if (!nonceCookie?.value) {
+    redirect('/dang-nhap?error=' + encodeURIComponent('Phiên đăng nhập không hợp lệ hoặc đã hết hạn.'))
   }
 
+  const userId = verifyNonce(nonceCookie.value)
+
+  if (!userId) {
+    redirect('/dang-nhap?error=' + encodeURIComponent('Liên kết đã hết hạn. Vui lòng yêu cầu liên kết mới.'))
+  }
+
+  // Gọi Server Action — signIn() chỉ hoạt động trong Server Action context
+  // Cookie sẽ tự expire sau 60s (không cần xóa thủ công)
   try {
-    // Server Action tạo session và redirect về /hom-nay
-    await loginWithUserId(uid)
+    await loginWithUserId(userId)
   } catch {
     redirect('/dang-nhap?error=' + encodeURIComponent('Đăng nhập thất bại. Vui lòng thử lại.'))
   }
 
-  // Không bao giờ đến đây (loginWithUserId luôn redirect hoặc throw)
+  // loginWithUserId luôn redirect hoặc throw — không bao giờ đến đây
   redirect('/hom-nay')
 }
