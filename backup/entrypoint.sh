@@ -15,6 +15,11 @@ case "$BACKUP_TYPE" in
     export RCLONE_CONFIG_DEST_ENDPOINT="${BACKUP_ENDPOINT:?BACKUP_ENDPOINT chưa được đặt}"
     export RCLONE_CONFIG_DEST_ACCESS_KEY_ID="${BACKUP_ACCESS_KEY:?BACKUP_ACCESS_KEY chưa được đặt}"
     export RCLONE_CONFIG_DEST_SECRET_ACCESS_KEY="${BACKUP_SECRET_KEY:?BACKUP_SECRET_KEY chưa được đặt}"
+    # Tương thích R2: region "auto", tắt checksum tự động (rclone mới gửi trailer làm R2 trả 400),
+    # không kiểm tra bucket khi ghi.
+    export RCLONE_CONFIG_DEST_REGION=auto
+    export RCLONE_CONFIG_DEST_DISABLE_CHECKSUM=true
+    export RCLONE_CONFIG_DEST_NO_CHECK_BUCKET=true
     ;;
   sftp)
     export RCLONE_CONFIG_DEST_TYPE=sftp
