@@ -1,0 +1,229 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Bộ phận ─────────────────────────────────────────────────────────────────
+
+model Department {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  users    User[]
+  projects Project[]
+  tasks    Task[]
+
+  @@map("departments")
+}
+
+// ─── Người dùng ───────────────────────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  fullName     String     @map("full_name")
+  role         Role       @default(MEMBER)
+  departmentId String?    @map("department_id")
+  department   Department? @relation(fields: [departmentId], references: [id])
+  active       Boolean    @default(true)
+  lastLoginAt  DateTime?  @map("last_login_at") @db.Timestamptz
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Notification channels
+  telegramChatId String? @map("telegram_chat_id")
+  zaloId         String? @map("zalo_id")
+  notifyEmail    Boolean @default(true) @map("notify_email")
+
+  loginTokens  LoginToken[]
+  sessions     Session[]
+  tasksOwned   Task[]         @relation("TaskOwner")
+  tasksCreated Task[]         @relation("TaskCreator")
+  activities   ActivityLog[]
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+// ─── Magic Link Token ─────────────────────────────────────────────────────────
+
+model LoginToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @map("token_hash") // SHA-256, không lưu token thô
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tokenHash])
+  @@map("login_tokens")
+}
+
+// ─── Phiên làm việc ──────────────────────────────────────────────────────────
+
+model Session {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @map("token_hash")
+  lastSeenAt DateTime  @map("last_seen_at") @db.Timestamptz
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tokenHash])
+  @@map("sessions")
+}
+
+// ─── Dự án ───────────────────────────────────────────────────────────────────
+
+model Project {
+  id           String        @id @default(cuid())
+  name         String
+  ownerId      String        @map("owner_id")
+  departmentId String        @map("department_id")
+  department   Department    @relation(fields: [departmentId], references: [id])
+  startDate    DateTime      @map("start_date") @db.Date
+  endDate      DateTime      @map("end_date") @db.Date
+  status       ProjectStatus @default(ACTIVE)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  tasks Task[]
+
+  @@map("projects")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+// ─── Việc ─────────────────────────────────────────────────────────────────────
+
+model Task {
+  id           String     @id @default(cuid())
+  projectId    String     @map("project_id")
+  project      Project    @relation(fields: [projectId], references: [id])
+  title        String     @db.VarChar(200)
+  description  String?
+  ownerId      String?    @map("owner_id")
+  owner        User?      @relation("TaskOwner", fields: [ownerId], references: [id])
+  departmentId String?    @map("department_id")
+  department   Department? @relation(fields: [departmentId], references: [id])
+  startDate    DateTime   @map("start_date") @db.Date
+  dueDate      DateTime   @map("due_date") @db.Date
+  durationDays Int        @default(1) @map("duration_days")
+  progress     Int        @default(0)
+  status       TaskStatus @default(TODO)
+  priority     Priority   @default(NORMAL)
+  createdBy    String     @map("created_by")
+  creator      User       @relation("TaskCreator", fields: [createdBy], references: [id])
+  deletedAt    DateTime?  @map("deleted_at") @db.Timestamptz
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  links        TaskLink[]
+  predecessors TaskDependency[] @relation("Successor")
+  successors   TaskDependency[] @relation("Predecessor")
+  outputs      TaskOutput[]
+  activities   ActivityLog[]
+
+  @@index([ownerId, dueDate])
+  @@index([projectId])
+  @@map("tasks")
+}
+
+enum TaskStatus {
+  TODO
+  DOING
+  DONE
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+// ─── Link tài liệu ───────────────────────────────────────────────────────────
+
+model TaskLink {
+  id        String   @id @default(cuid())
+  taskId    String   @map("task_id")
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  title     String
+  url       String   // chỉ https://
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("task_links")
+}
+
+// ─── Phụ thuộc ───────────────────────────────────────────────────────────────
+
+model TaskDependency {
+  id            String   @id @default(cuid())
+  predecessorId String   @map("predecessor_id")
+  predecessor   Task     @relation("Predecessor", fields: [predecessorId], references: [id], onDelete: Cascade)
+  successorId   String   @map("successor_id")
+  successor     Task     @relation("Successor", fields: [successorId], references: [id], onDelete: Cascade)
+  lagDays       Int      @default(0) @map("lag_days")
+  createdBy     String   @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([predecessorId, successorId])
+  @@index([successorId])
+  @@map("task_dependencies")
+}
+
+// ─── Đầu ra bàn giao ─────────────────────────────────────────────────────────
+
+model TaskOutput {
+  id          String       @id @default(cuid())
+  taskId      String       @map("task_id")
+  task        Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  title       String
+  url         String?
+  status      OutputStatus @default(PENDING)
+  deliveredAt DateTime?    @map("delivered_at") @db.Timestamptz
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("task_outputs")
+}
+
+enum OutputStatus {
+  PENDING
+  DELIVERED
+}
+
+// ─── Nhật ký hoạt động ───────────────────────────────────────────────────────
+
+model ActivityLog {
+  id       String   @id @default(cuid())
+  actorId  String   @map("actor_id")
+  actor    User     @relation(fields: [actorId], references: [id])
+  entity   String   // 'task' | 'project' | 'dependency' | 'user'
+  entityId String   @map("entity_id")
+  taskRef  Task?    @relation(fields: [entityId], references: [id])
+  action   String
+  before   Json?
+  after    Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([entity, entityId])
+  @@map("activity_log")
+}
