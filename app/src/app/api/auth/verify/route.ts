@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyMagicToken, signIn } from '@/lib/auth'
+import { verifyMagicToken } from '@/lib/auth'
 
+/**
+ * GET /api/auth/verify?token=...
+ *
+ * Xác minh magic link token, sau đó redirect sang /auth/callback để
+ * tạo session qua Server Action (signIn() chỉ hoạt động trong Server Action,
+ * không hoạt động trong Route Handler — NextAuth v5 limitation).
+ */
 export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get('token')
 
@@ -15,21 +22,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL(`/dang-nhap?error=${encoded}`, req.url))
   }
 
-  // Tạo JWT session thông qua NextAuth CredentialsProvider nội bộ
-  try {
-    await signIn('magic-link', {
-      userId: result.userId,
-      redirectTo: '/hom-nay',
-    })
-  } catch (error: unknown) {
-    // NextAuth ném NEXT_REDIRECT exception — đây là cơ chế bình thường
-    // Phải re-throw để Next.js xử lý redirect
-    if (error instanceof Error && error.message === 'NEXT_REDIRECT') {
-      throw error
-    }
-    // Lỗi thật
-    return NextResponse.redirect(new URL('/dang-nhap?error=server-error', req.url))
-  }
-
-  return NextResponse.redirect(new URL('/hom-nay', req.url))
+  // Redirect sang callback page để tạo session qua Server Action
+  // userId được encode vào URL tạm (ngắn hạn, không nhạy cảm — không phải token thật)
+  const callbackUrl = new URL('/auth/callback', req.url)
+  callbackUrl.searchParams.set('uid', result.userId)
+  return NextResponse.redirect(callbackUrl)
 }

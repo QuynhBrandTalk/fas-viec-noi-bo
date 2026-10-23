@@ -8,6 +8,8 @@ export default async function HomNayPage() {
 
   const today = new Date(new Date().toLocaleString('en', { timeZone: 'Asia/Ho_Chi_Minh' }))
   today.setHours(0, 0, 0, 0)
+  const endOfToday = new Date(today)
+  endOfToday.setHours(23, 59, 59, 999)
   const in7Days = new Date(today)
   in7Days.setDate(today.getDate() + 7)
 
@@ -24,8 +26,9 @@ export default async function HomNayPage() {
   })
 
   const overdue = tasks.filter((t) => new Date(t.dueDate) < today)
+  // So sánh theo khoảng [start of today, end of today] — không dùng === vì Date là datetime
   const todayTasks = tasks.filter(
-    (t) => new Date(t.dueDate) >= today && new Date(t.dueDate) <= today
+    (t) => new Date(t.dueDate) >= today && new Date(t.dueDate) <= endOfToday
   )
   const upcoming = tasks.filter(
     (t) => new Date(t.dueDate) > today && new Date(t.dueDate) <= in7Days

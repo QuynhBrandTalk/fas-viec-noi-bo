@@ -39,7 +39,9 @@ COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 
 # Script khởi động: chạy migration rồi start app
 COPY start.sh ./
-RUN chmod +x start.sh
+# Đảm bảo execute permission cho start.sh và prisma binary
+# (permission có thể không được giữ nguyên khi COPY cross-stage)
+RUN chmod +x start.sh && chmod +x ./node_modules/.bin/prisma
 
 USER nextjs
 EXPOSE 3000

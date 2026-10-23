@@ -33,6 +33,7 @@ export const authConfig: NextAuthConfig = {
   },
   providers: [
     // CredentialsProvider chỉ dùng nội bộ sau khi verify magic link
+    // Được gọi từ Server Action loginWithUserId() — không expose ra ngoài
     Credentials({
       id: 'magic-link',
       credentials: {
@@ -44,7 +45,14 @@ export const authConfig: NextAuthConfig = {
 
         const user = await prisma.user.findUnique({
           where: { id: userId },
-          select: { id: true, email: true, fullName: true, role: true, departmentId: true, active: true },
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+            role: true,
+            departmentId: true,
+            active: true,
+          },
         })
 
         if (!user || !user.active) return null
@@ -88,20 +96,22 @@ export const authConfig: NextAuthConfig = {
       return token
     },
   },
-  session: { strategy: 'jwt', maxAge: 12 * 60 * 60 }, // 12 giờ tối đa
+  session: { strategy: 'jwt', maxAge: 12 * 60 * 60 }, // 12 giờ
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth(authConfig)
 
 // ─── Magic Link logic ─────────────────────────────────────────────────────────
 
-export async function requestMagicLink(email: string, ip: string): Promise<{
-  ok: boolean
-  error?: string
-}> {
+export async function requestMagicLink(
+  email: string,
+  ip: string,
+): Promise<{ ok: boolean; error?: string }> {
   const normalizedEmail = email.toLowerCase().trim()
 
-  // Kiểm tra rate limit
+  // Rate limit: kiểm tra trước khi query DB để giảm load
+  // Lưu ý: rate limit tính cả email không tồn tại để tránh timing attack
+  // (nếu check email trước → lộ thông tin qua độ trễ phản hồi)
   if (!checkRateLimit(`email:${normalizedEmail}`, RATE_LIMIT_EMAIL)) {
     return { ok: false, error: 'Bạn đã yêu cầu quá nhiều lần. Vui lòng thử lại sau 1 giờ.' }
   }
@@ -109,18 +119,17 @@ export async function requestMagicLink(email: string, ip: string): Promise<{
     return { ok: false, error: 'Quá nhiều yêu cầu từ địa chỉ này.' }
   }
 
-  // Kiểm tra email tồn tại và đang active (không tiết lộ nếu không tồn tại)
   const user = await prisma.user.findUnique({
     where: { email: normalizedEmail },
     select: { id: true, active: true, fullName: true },
   })
 
+  // Trả về ok dù email không tồn tại — tránh email enumeration
   if (!user || !user.active) {
-    // Trả về ok để không tiết lộ email có tồn tại hay không
     return { ok: true }
   }
 
-  // Tạo token
+  // Tạo token ngẫu nhiên, lưu hash (không lưu plaintext)
   const token = crypto.randomBytes(32).toString('hex')
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
   const expiresAt = new Date(Date.now() + TOKEN_EXPIRY_MINUTES * 60 * 1000)
@@ -131,19 +140,14 @@ export async function requestMagicLink(email: string, ip: string): Promise<{
 
   const magicUrl = `${process.env.NEXTAUTH_URL}/api/auth/verify?token=${token}`
 
-  await sendMagicLink({
-    to: normalizedEmail,
-    name: user.fullName,
-    magicUrl,
-  })
+  await sendMagicLink({ to: normalizedEmail, name: user.fullName, magicUrl })
 
   return { ok: true }
 }
 
-export async function verifyMagicToken(token: string): Promise<{
-  userId?: string
-  error?: string
-}> {
+export async function verifyMagicToken(
+  token: string,
+): Promise<{ userId?: string; error?: string }> {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
 
   const record = await prisma.loginToken.findFirst({
@@ -152,15 +156,20 @@ export async function verifyMagicToken(token: string): Promise<{
   })
 
   if (!record) return { error: 'Liên kết không hợp lệ hoặc đã hết hạn.' }
-  if (record.usedAt) return { error: 'Liên kết này đã được sử dụng.' }
-  if (record.expiresAt < new Date()) return { error: 'Liên kết đã hết hạn (15 phút). Vui lòng yêu cầu liên kết mới.' }
+  if (record.expiresAt < new Date())
+    return { error: 'Liên kết đã hết hạn (15 phút). Vui lòng yêu cầu liên kết mới.' }
   if (!record.user.active) return { error: 'Tài khoản đã bị vô hiệu hoá.' }
 
-  // Đánh dấu token đã dùng
-  await prisma.loginToken.update({
-    where: { id: record.id },
+  // Atomic update: đánh dấu used chỉ khi chưa dùng
+  // Ngăn race condition khi 2 request đến đồng thời với cùng token
+  const updated = await prisma.loginToken.updateMany({
+    where: { id: record.id, usedAt: null },
     data: { usedAt: new Date() },
   })
+
+  if (updated.count === 0) {
+    return { error: 'Liên kết này đã được sử dụng.' }
+  }
 
   // Cập nhật last login
   await prisma.user.update({

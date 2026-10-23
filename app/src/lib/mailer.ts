@@ -1,14 +1,32 @@
 import nodemailer from 'nodemailer'
+import type { Transporter } from 'nodemailer'
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST ?? 'smtp-relay.brevo.com',
-  port: Number(process.env.SMTP_PORT ?? 587),
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-})
+// Lazy init: transporter chỉ tạo khi gọi hàm, không phải lúc module load
+// → tránh fail khi SMTP_* chưa có lúc build, và dễ mock trong test
+let _transporter: Transporter | null = null
+
+function getTransporter(): Transporter {
+  if (_transporter) return _transporter
+
+  const host = process.env.SMTP_HOST
+  const user = process.env.SMTP_USER
+  const pass = process.env.SMTP_PASS
+
+  if (!host || !user || !pass) {
+    throw new Error(
+      'SMTP chưa được cấu hình. Cần đặt SMTP_HOST, SMTP_USER, SMTP_PASS trong .env',
+    )
+  }
+
+  _transporter = nodemailer.createTransport({
+    host,
+    port: Number(process.env.SMTP_PORT ?? 587),
+    secure: false, // STARTTLS trên port 587
+    auth: { user, pass },
+  })
+
+  return _transporter
+}
 
 interface MagicLinkOptions {
   to: string
@@ -18,22 +36,32 @@ interface MagicLinkOptions {
 
 export async function sendMagicLink({ to, name, magicUrl }: MagicLinkOptions) {
   const brandName = process.env.BRAND_NAME ?? 'Việc nội bộ'
-  const fromEmail = process.env.SMTP_FROM ?? `noreply@${process.env.APP_DOMAIN ?? 'localhost'}`
+  const fromEmail = process.env.SMTP_FROM ?? `no-reply@${process.env.APP_DOMAIN ?? 'localhost'}`
 
-  if (process.env.NODE_ENV === 'development' && !process.env.SMTP_HOST) {
-    // Dev mode: in ra console thay vì gửi email
-    console.log('\n─── MAGIC LINK (dev mode) ───')
-    console.log(`To: ${to}`)
+  // Dev mode: in ra console nếu không có SMTP config
+  if (!process.env.SMTP_HOST) {
+    console.log('\n─── MAGIC LINK (dev mode — SMTP chưa cấu hình) ───')
+    console.log(`To:  ${to}`)
     console.log(`URL: ${magicUrl}`)
-    console.log('────────────────────────────\n')
+    console.log('───────────────────────────────────────────────────\n')
     return
   }
+
+  const transporter = getTransporter()
 
   await transporter.sendMail({
     from: `"${brandName}" <${fromEmail}>`,
     to,
     subject: `Đăng nhập vào ${brandName}`,
-    text: `Xin chào ${name},\n\nBấm vào liên kết sau để đăng nhập:\n${magicUrl}\n\nLinh kết hết hạn sau 15 phút và chỉ dùng được một lần.\n\nNếu bạn không yêu cầu, hãy bỏ qua email này.`,
+    text: [
+      `Xin chào ${name},`,
+      '',
+      `Bấm vào liên kết sau để đăng nhập:`,
+      magicUrl,
+      '',
+      'Liên kết hết hạn sau 15 phút và chỉ dùng được một lần.',
+      'Nếu bạn không yêu cầu, hãy bỏ qua email này.',
+    ].join('\n'),
     html: `
 <!DOCTYPE html>
 <html lang="vi">
@@ -44,7 +72,10 @@ export async function sendMagicLink({ to, name, magicUrl }: MagicLinkOptions) {
     <p style="color: #555; margin: 0 0 24px;">Xin chào <strong>${name}</strong>,</p>
     <p style="color: #555; margin: 0 0 24px;">Bấm vào nút bên dưới để đăng nhập:</p>
     <a href="${magicUrl}" style="display: inline-block; background: #2563eb; color: white; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px;">Đăng nhập ngay</a>
-    <p style="color: #999; font-size: 13px; margin: 24px 0 0;">Liên kết hết hạn sau <strong>15 phút</strong> và chỉ dùng được một lần.<br>Nếu bạn không yêu cầu, hãy bỏ qua email này.</p>
+    <p style="color: #999; font-size: 13px; margin: 24px 0 0;">
+      Liên kết hết hạn sau <strong>15 phút</strong> và chỉ dùng được một lần.<br>
+      Nếu bạn không yêu cầu, hãy bỏ qua email này.
+    </p>
   </div>
 </body>
 </html>`,
