@@ -1,0 +1,5 @@
+NAME                IMAGE             COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+viec-app-backup-1   viec-app-backup   "/usr/local/bin/entr…"   backup    44 seconds ago   Up 33 seconds             5432/tcp
+viec-app-caddy-1    caddy:2           "caddy run --config …"   caddy     44 seconds ago   Up 17 seconds             0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp, 443/udp, 2019/tcp
+viec-app-db-1       postgres:16       "docker-entrypoint.s…"   db        44 seconds ago   Up 43 seconds (healthy)   5432/tcp
+viec-app-web-1      viec-app-web      "docker-entrypoint.s…"   web       44 seconds ago   Up 33 seconds (healthy)   3000/tcp

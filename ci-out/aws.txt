@@ -1,0 +1,25 @@
+aws version: aws-cli/2.37.13 Python/3.14.6 Linux/6.17.0-1022-azure exe/x86_64.ubuntu.24
+--- PUT ---
+{
+    "ETag": "\"b1946ac92492d2347c6235b4d2611184\"",
+    "ChecksumCRC64NVME": "akP7S61aVgc=",
+    "VersionId": "7e5e9718f7d69a67a45cc38bb32d1090"
+}
+exit=0
+--- LIST ---
+{
+    "Contents": [
+        {
+            "Key": "diag/aws-test.txt",
+            "LastModified": "2026-10-23T13:15:34.097000+00:00",
+            "ETag": "\"b1946ac92492d2347c6235b4d2611184\"",
+            "Size": 6,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "RequestCharged": null,
+    "Prefix": "diag/"
+}
+exit=0
+--- DELETE ---
+exit=0
