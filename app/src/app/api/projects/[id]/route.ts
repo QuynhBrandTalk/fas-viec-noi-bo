@@ -22,7 +22,7 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
       include: { department: { select: { id: true, name: true } } },
     })
 
-    if (!project) {
+    if (!project || project.deletedAt) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
 
@@ -151,11 +151,11 @@ export async function DELETE(req: NextRequest, { params }: RouteContext) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    // Soft delete: set status ARCHIVED hoặc soft delete via updateMany
-    // → đơn giản hơn: chỉ set status = ARCHIVED (không xóa thật)
-    const archived = await prisma.project.update({
+    // Soft delete: set deletedAt (như tasks, cho consistency)
+    // Không xóa thật — các query sẽ filter deletedAt: null
+    const deleted = await prisma.project.update({
       where: { id: params.id },
-      data: { status: 'ARCHIVED' },
+      data: { deletedAt: new Date() },
     })
 
     // Ghi ActivityLog
@@ -164,11 +164,11 @@ export async function DELETE(req: NextRequest, { params }: RouteContext) {
         actorId: session.user.id,
         entity: 'project',
         entityId: params.id,
-        action: 'archive',
+        action: 'delete',
       },
     })
 
-    return NextResponse.json({ message: 'Project archived', data: archived })
+    return NextResponse.json({ message: 'Project deleted', data: deleted })
   } catch (error) {
     console.error('DELETE /api/projects/[id] error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

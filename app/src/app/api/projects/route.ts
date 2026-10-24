@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     const { page, limit, departmentId, status } = parsed.data
 
     // RBAC: MANAGER xem phòng ban mình, ADMIN xem tất cả
-    let filter: any = {}
+    let filter: any = { deletedAt: null }
     if (status) filter.status = status
 
     if (session.user.role === 'MANAGER') {
