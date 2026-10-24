@@ -100,22 +100,27 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       data: {
         taskId: params.id,
         linkedTaskId,
+        createdBy: session.user.id,
       },
     })
 
-    // ActivityLog
-    await prisma.activityLog.create({
-      data: {
-        actorId: session.user.id,
-        entity: 'taskLink',
-        entityId: link.id,
-        action: 'create',
-        after: {
-          taskId: link.taskId,
-          linkedTaskId: link.linkedTaskId,
+    // ActivityLog (best-effort, don't block on failure)
+    try {
+      await prisma.activityLog.create({
+        data: {
+          actorId: session.user.id,
+          entity: 'taskLink',
+          entityId: link.id,
+          action: 'create',
+          after: {
+            taskId: link.taskId,
+            linkedTaskId: link.linkedTaskId,
+          },
         },
-      },
-    })
+      })
+    } catch (logErr) {
+      console.warn('ActivityLog create failed:', logErr)
+    }
 
     return NextResponse.json(link, { status: 201 })
   } catch (error) {

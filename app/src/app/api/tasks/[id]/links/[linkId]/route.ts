@@ -59,19 +59,23 @@ export async function DELETE(req: NextRequest, { params }: RouteContext) {
       where: { id: params.linkId },
     })
 
-    // ActivityLog
-    await prisma.activityLog.create({
-      data: {
-        actorId: session.user.id,
-        entity: 'taskLink',
-        entityId: params.linkId,
-        action: 'delete',
-        before: {
-          taskId: link.taskId,
-          linkedTaskId: link.linkedTaskId,
+    // ActivityLog (best-effort, don't block on failure)
+    try {
+      await prisma.activityLog.create({
+        data: {
+          actorId: session.user.id,
+          entity: 'taskLink',
+          entityId: params.linkId,
+          action: 'delete',
+          before: {
+            taskId: link.taskId,
+            linkedTaskId: link.linkedTaskId,
+          },
         },
-      },
-    })
+      })
+    } catch (logErr) {
+      console.warn('ActivityLog create failed:', logErr)
+    }
 
     return NextResponse.json({ message: 'Link deleted' })
   } catch (error) {

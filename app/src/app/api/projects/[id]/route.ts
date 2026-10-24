@@ -99,23 +99,27 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
       include: { department: { select: { name: true } } },
     })
 
-    // Ghi ActivityLog
-    await prisma.activityLog.create({
-      data: {
-        actorId: session.user.id,
-        entity: 'project',
-        entityId: params.id,
-        action: 'update',
-        before: {
-          name: before?.name,
-          endDate: before?.endDate,
+    // Ghi ActivityLog (best-effort, don't block on failure)
+    try {
+      await prisma.activityLog.create({
+        data: {
+          actorId: session.user.id,
+          entity: 'project',
+          entityId: params.id,
+          action: 'update',
+          before: {
+            name: before?.name,
+            endDate: before?.endDate,
+          },
+          after: {
+            name: updated.name,
+            endDate: updated.endDate,
+          },
         },
-        after: {
-          name: updated.name,
-          endDate: updated.endDate,
-        },
-      },
-    })
+      })
+    } catch (logErr) {
+      console.warn('ActivityLog create failed:', logErr)
+    }
 
     return NextResponse.json(updated)
   } catch (error) {
@@ -154,15 +158,19 @@ export async function DELETE(req: NextRequest, { params }: RouteContext) {
       data: { deletedAt: new Date() },
     })
 
-    // Ghi ActivityLog
-    await prisma.activityLog.create({
-      data: {
-        actorId: session.user.id,
-        entity: 'project',
-        entityId: params.id,
-        action: 'delete',
-      },
-    })
+    // Ghi ActivityLog (best-effort, don't block on failure)
+    try {
+      await prisma.activityLog.create({
+        data: {
+          actorId: session.user.id,
+          entity: 'project',
+          entityId: params.id,
+          action: 'delete',
+        },
+      })
+    } catch (logErr) {
+      console.warn('ActivityLog create failed:', logErr)
+    }
 
     return NextResponse.json({ message: 'Project deleted', data: deleted })
   } catch (error) {

@@ -10,7 +10,6 @@ const GetProjectsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   departmentId: z.string().optional(),
-  status: z.enum(['ACTIVE', 'ARCHIVED']).optional(),
 })
 
 export async function GET(req: NextRequest) {
@@ -26,11 +25,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid query params', details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { page, limit, departmentId, status } = parsed.data
+    const { page, limit, departmentId } = parsed.data
 
     // RBAC: MANAGER xem phòng ban mình, ADMIN xem tất cả
     let filter: any = { deletedAt: null }
-    if (status) filter.status = status
 
     if (session.user.role === 'MANAGER') {
       filter.departmentId = session.user.departmentId

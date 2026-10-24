@@ -91,25 +91,20 @@ model Session {
 // ─── Dự án ───────────────────────────────────────────────────────────────────
 
 model Project {
-  id           String        @id @default(cuid())
+  id           String       @id @default(cuid())
   name         String
-  ownerId      String        @map("owner_id")
-  departmentId String        @map("department_id")
-  department   Department    @relation(fields: [departmentId], references: [id])
-  startDate    DateTime      @map("start_date") @db.Date
-  endDate      DateTime      @map("end_date") @db.Date
-  status       ProjectStatus @default(ACTIVE)
-  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+  ownerId      String       @map("owner_id")
+  departmentId String       @map("department_id")
+  department   Department   @relation(fields: [departmentId], references: [id])
+  startDate    DateTime     @map("start_date") @db.Date
+  endDate      DateTime     @map("end_date") @db.Date
+  deletedAt    DateTime?    @map("deleted_at") @db.Timestamptz
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz
 
   tasks Task[]
 
   @@map("projects")
-}
-
-enum ProjectStatus {
-  ACTIVE
-  ARCHIVED
 }
 
 // ─── Việc ─────────────────────────────────────────────────────────────────────
@@ -159,17 +154,19 @@ enum Priority {
   HIGH
 }
 
-// ─── Link tài liệu ───────────────────────────────────────────────────────────
+// ─── Link tài liệu + Task Link ────────────────────────────────────────────────
 
 model TaskLink {
-  id        String   @id @default(cuid())
-  taskId    String   @map("task_id")
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  title     String
-  url       String   // chỉ https://
-  createdBy String   @map("created_by")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id           String   @id @default(cuid())
+  taskId       String   @map("task_id")
+  task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  linkedTaskId String?  @map("linked_task_id") // Task relationship (optional)
+  title        String?
+  url          String?  // chỉ https://
+  createdBy    String   @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
 
+  @@unique([taskId, linkedTaskId])
   @@map("task_links")
 }
 

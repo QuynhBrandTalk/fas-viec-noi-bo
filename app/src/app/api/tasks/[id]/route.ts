@@ -122,25 +122,29 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
       },
     })
 
-    // Ghi ActivityLog
-    await prisma.activityLog.create({
-      data: {
-        actorId: session.user.id,
-        entity: 'task',
-        entityId: params.id,
-        action: 'update',
-        before: {
-          status: before?.status,
-          priority: before?.priority,
-          ownerId: before?.ownerId,
+    // Ghi ActivityLog (best-effort, don't block on failure)
+    try {
+      await prisma.activityLog.create({
+        data: {
+          actorId: session.user.id,
+          entity: 'task',
+          entityId: params.id,
+          action: 'update',
+          before: {
+            status: before?.status,
+            priority: before?.priority,
+            ownerId: before?.ownerId,
+          },
+          after: {
+            status: updated.status,
+            priority: updated.priority,
+            ownerId: updated.ownerId,
+          },
         },
-        after: {
-          status: updated.status,
-          priority: updated.priority,
-          ownerId: updated.ownerId,
-        },
-      },
-    })
+      })
+    } catch (logErr) {
+      console.warn('ActivityLog create failed:', logErr)
+    }
 
     return NextResponse.json(updated)
   } catch (error) {
@@ -192,15 +196,19 @@ export async function DELETE(req: NextRequest, { params }: RouteContext) {
       data: { deletedAt: new Date() },
     })
 
-    // Ghi ActivityLog
-    await prisma.activityLog.create({
-      data: {
-        actorId: session.user.id,
-        entity: 'task',
-        entityId: params.id,
-        action: 'delete',
-      },
-    })
+    // Ghi ActivityLog (best-effort, don't block on failure)
+    try {
+      await prisma.activityLog.create({
+        data: {
+          actorId: session.user.id,
+          entity: 'task',
+          entityId: params.id,
+          action: 'delete',
+        },
+      })
+    } catch (logErr) {
+      console.warn('ActivityLog create failed:', logErr)
+    }
 
     return NextResponse.json({ message: 'Task deleted', data: deleted })
   } catch (error) {
