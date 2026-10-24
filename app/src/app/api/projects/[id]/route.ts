@@ -58,10 +58,10 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
 
     const project = await prisma.project.findUnique({
       where: { id: params.id },
-      select: { departmentId: true, ownerId: true, startDate: true },
+      select: { departmentId: true, ownerId: true, startDate: true, deletedAt: true },
     })
 
-    if (!project) {
+    if (!project || project.deletedAt) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
 
