@@ -45,7 +45,6 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
 
 const UpdateProjectSchema = z.object({
   name: z.string().min(1).max(200).optional(),
-  status: z.enum(['ACTIVE', 'ARCHIVED']).optional(),
   endDate: z.string().datetime().optional(),
 })
 
@@ -79,7 +78,7 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
       return NextResponse.json({ error: 'Invalid input', details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { name, status, endDate } = parsed.data
+    const { name, endDate } = parsed.data
 
     // Validate ngày nếu update
     if (endDate) {
@@ -95,7 +94,6 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
       where: { id: params.id },
       data: {
         ...(name && { name }),
-        ...(status && { status }),
         ...(endDate && { endDate: new Date(endDate) }),
       },
       include: { department: { select: { name: true } } },
@@ -110,12 +108,10 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
         action: 'update',
         before: {
           name: before?.name,
-          status: before?.status,
           endDate: before?.endDate,
         },
         after: {
           name: updated.name,
-          status: updated.status,
           endDate: updated.endDate,
         },
       },
