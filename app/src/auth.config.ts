@@ -1,4 +1,5 @@
 import type { NextAuthConfig } from 'next-auth'
+import type { Role } from '@prisma/client'
 
 /**
  * Cấu hình dùng chung, AN TOÀN cho Edge runtime (middleware).
@@ -44,8 +45,8 @@ export const authConfig = {
     session({ session, token }) {
       if (token.sub) {
         session.user.id = token.sub
-        if (token.role) session.user.role = token.role
-        session.user.departmentId = token.departmentId
+        if (token.role) session.user.role = token.role as Role
+        session.user.departmentId = typeof token.departmentId === 'string' ? token.departmentId : undefined
       }
       return session
     },

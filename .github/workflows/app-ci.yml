@@ -13,6 +13,9 @@ concurrency:
   group: app-ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 defaults:
   run:
     working-directory: app
@@ -85,6 +88,17 @@ jobs:
           name: package-lock
           path: app/package-lock.json
 
+      - name: Commit lockfile vào nhánh (chỉ lần đầu, chỉ nhánh fix/feat)
+        if: github.event_name == 'push' && (startsWith(github.ref_name, 'fix/') || startsWith(github.ref_name, 'feat/'))
+        run: |
+          if [ -n "$(git status --porcelain package-lock.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "chore: thêm package-lock.json do CI sinh (khoá phiên bản gói)"
+            git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::Không push được lockfile"
+          fi
+
       - name: Kiểm tra schema Prisma
         run: bash ../.github/ci-step.sh prisma-validate npx prisma validate
 
@@ -115,7 +129,7 @@ jobs:
             curl -sf http://localhost:3000/api/healthz && exit 0
             sleep 1
           done
-          bash ../.github/ci-step.sh server-start cat server.log; echo "::error::Server không lên"; exit 1
+          bash ../.github/ci-step.sh server-start bash -c 'cat server.log; exit 1'
 
       - name: Cài Chromium cho Playwright
         run: npx playwright install --with-deps chromium
