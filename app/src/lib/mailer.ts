@@ -28,6 +28,10 @@ function getTransporter(): Transporter {
   return _transporter
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+}
+
 interface MagicLinkOptions {
   to: string
   name: string
@@ -68,8 +72,8 @@ export async function sendMagicLink({ to, name, magicUrl }: MagicLinkOptions) {
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
 <body style="font-family: system-ui, sans-serif; background: #f8f9fa; padding: 20px; margin: 0;">
   <div style="max-width: 480px; margin: 40px auto; background: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);">
-    <h2 style="margin: 0 0 8px; font-size: 20px; color: #111;">${brandName}</h2>
-    <p style="color: #555; margin: 0 0 24px;">Xin chào <strong>${name}</strong>,</p>
+    <h2 style="margin: 0 0 8px; font-size: 20px; color: #111;">${escapeHtml(brandName)}</h2>
+    <p style="color: #555; margin: 0 0 24px;">Xin chào <strong>${escapeHtml(name)}</strong>,</p>
     <p style="color: #555; margin: 0 0 24px;">Bấm vào nút bên dưới để đăng nhập:</p>
     <a href="${magicUrl}" style="display: inline-block; background: #2563eb; color: white; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px;">Đăng nhập ngay</a>
     <p style="color: #999; font-size: 13px; margin: 24px 0 0;">

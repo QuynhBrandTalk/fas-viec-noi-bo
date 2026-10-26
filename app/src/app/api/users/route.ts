@@ -1,79 +1,66 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
+import { NextRequest } from 'next/server'
+import { z } from 'zod'
+import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { can } from '@/lib/rbac'
-import { z } from 'zod'
-import type { Role } from '@prisma/client'
+import { badRequest, forbidden, json, logActivity, readJson, serverError, unauthorized } from '@/lib/api'
 
-// GET /api/users — danh sách người dùng (chỉ ADMIN và MANAGER)
+// GET /api/users — ADMIN và MANAGER
 export async function GET() {
-  const session = await auth()
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Chưa đăng nhập' }, { status: 401 })
+  try {
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    if (!can(user, 'user:read')) return forbidden()
+
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        active: true,
+        lastLoginAt: true,
+        department: { select: { id: true, name: true } },
+      },
+      orderBy: [{ role: 'asc' }, { fullName: 'asc' }],
+    })
+    return json({ users })
+  } catch (err) {
+    return serverError('GET /api/users', err)
   }
-
-  const userRole = session.user.role as Role
-  if (!can({ role: userRole }, 'user:manage') && !can({ role: userRole }, 'report:read')) {
-    return NextResponse.json({ error: 'Không có quyền' }, { status: 403 })
-  }
-
-  const users = await prisma.user.findMany({
-    select: {
-      id: true,
-      email: true,
-      fullName: true,
-      role: true,
-      active: true,
-      lastLoginAt: true,
-      department: { select: { id: true, name: true } },
-    },
-    orderBy: [{ role: 'asc' }, { fullName: 'asc' }],
-  })
-
-  return NextResponse.json({ users })
 }
 
-// POST /api/users — mời người dùng mới (chỉ ADMIN)
-const inviteSchema = z.object({
-  email: z.string().email('Email không hợp lệ'),
-  fullName: z.string().min(2, 'Họ tên phải có ít nhất 2 ký tự'),
+const Invite = z.object({
+  email: z.string().trim().email('Email không hợp lệ'),
+  fullName: z.string().trim().min(2, 'Họ tên phải có ít nhất 2 ký tự').max(120),
   role: z.enum(['ADMIN', 'MANAGER', 'MEMBER']),
   departmentId: z.string().optional(),
 })
 
+// POST /api/users — mời người dùng (chỉ ADMIN)
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Chưa đăng nhập' }, { status: 401 })
+  try {
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    if (!can(user, 'user:manage')) return forbidden()
+
+    const parsed = Invite.safeParse(await readJson(req))
+    if (!parsed.success) return badRequest(parsed.error.errors[0]?.message ?? 'Dữ liệu không hợp lệ')
+    const { email, fullName, role, departmentId } = parsed.data
+    const normalizedEmail = email.toLowerCase()
+
+    if (role === 'MANAGER' && !departmentId) return badRequest('Quản lý phải thuộc một bộ phận')
+
+    const existing = await prisma.user.findUnique({ where: { email: normalizedEmail }, select: { id: true } })
+    if (existing) return json({ error: 'Email này đã có trong hệ thống' }, 409)
+
+    const created = await prisma.user.create({
+      data: { email: normalizedEmail, fullName, role, departmentId: departmentId || null },
+      select: { id: true, email: true, fullName: true, role: true, departmentId: true },
+    })
+    await logActivity({ actorId: user.id, entity: 'user', entityId: created.id, action: 'invite', after: { role } })
+    return json({ user: created }, 201)
+  } catch (err) {
+    return serverError('POST /api/users', err)
   }
-
-  if (!can({ role: session.user.role as Role }, 'user:invite')) {
-    return NextResponse.json({ error: 'Không có quyền mời người dùng' }, { status: 403 })
-  }
-
-  const body = await req.json()
-  const parsed = inviteSchema.safeParse(body)
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.errors[0].message }, { status: 400 })
-  }
-
-  const { email, fullName, role, departmentId } = parsed.data
-  const normalizedEmail = email.toLowerCase().trim()
-
-  // Kiểm tra email đã tồn tại chưa
-  const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } })
-  if (existing) {
-    return NextResponse.json({ error: 'Email này đã được dùng trong hệ thống' }, { status: 409 })
-  }
-
-  const user = await prisma.user.create({
-    data: {
-      email: normalizedEmail,
-      fullName,
-      role: role as Role,
-      departmentId: departmentId || null,
-    },
-  })
-
-  return NextResponse.json({ user }, { status: 201 })
 }

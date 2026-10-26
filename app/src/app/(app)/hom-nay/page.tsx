@@ -1,105 +1,114 @@
-import { auth } from '@/lib/auth'
+import Link from 'next/link'
+import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { formatDate } from '@/lib/utils'
+import { addDays, dayKey, vnToday } from '@/lib/dates'
+import { can } from '@/lib/rbac'
+import DueBadge from '@/components/DueBadge'
+import TaskStatusSelect from '@/components/TaskStatusSelect'
 
 export default async function HomNayPage() {
-  const session = await auth()
-  if (!session?.user?.id) return null
-
-  const today = new Date(new Date().toLocaleString('en', { timeZone: 'Asia/Ho_Chi_Minh' }))
-  today.setHours(0, 0, 0, 0)
-  const endOfToday = new Date(today)
-  endOfToday.setHours(23, 59, 59, 999)
-  const in7Days = new Date(today)
-  in7Days.setDate(today.getDate() + 7)
+  const user = await getCurrentUser()
+  if (!user) return null
 
   const tasks = await prisma.task.findMany({
-    where: {
-      ownerId: session.user.id,
-      status: { not: 'DONE' },
-      deletedAt: null,
-    },
-    include: {
-      project: { select: { name: true } },
-    },
-    orderBy: { dueDate: 'asc' },
+    where: { ownerId: user.id, status: { not: 'DONE' }, deletedAt: null, project: { deletedAt: null } },
+    include: { project: { select: { id: true, name: true, departmentId: true } } },
+    orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
   })
 
-  const overdue = tasks.filter((t) => new Date(t.dueDate) < today)
-  // So sánh theo khoảng [start of today, end of today] — không dùng === vì Date là datetime
-  const todayTasks = tasks.filter(
-    (t) => new Date(t.dueDate) >= today && new Date(t.dueDate) <= endOfToday
-  )
-  const upcoming = tasks.filter(
-    (t) => new Date(t.dueDate) > today && new Date(t.dueDate) <= in7Days
-  )
+  const today = vnToday()
+  const in7 = addDays(today, 7)
+  const overdue = tasks.filter((t) => dayKey(t.dueDate) < today)
+  const dueToday = tasks.filter((t) => dayKey(t.dueDate) === today)
+  const soon = tasks.filter((t) => dayKey(t.dueDate) > today && dayKey(t.dueDate) <= in7)
+  const later = tasks.filter((t) => dayKey(t.dueDate) > in7)
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold text-gray-900">Hôm nay</h1>
+        <h1 className="text-lg font-semibold">Chào {user.name}</h1>
         <p className="text-sm text-gray-500">
-          {today.toLocaleDateString('vi-VN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+          Bạn có {overdue.length + dueToday.length} việc cần xử lý hôm nay ({overdue.length} quá hạn).
         </p>
       </div>
 
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Tile label="Quá hạn" value={overdue.length} danger />
+        <Tile label="Đến hạn hôm nay" value={dueToday.length} />
+        <Tile label="Trong 7 ngày tới" value={soon.length} />
+        <Tile label="Đang mở" value={tasks.length} />
+      </div>
+
       {tasks.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-          <p className="text-sm text-gray-500">Không có việc nào được giao cho bạn.</p>
+        <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-sm text-gray-500">
+          Chưa có việc nào được giao cho bạn.
         </div>
       ) : (
-        <div className="space-y-4">
-          <TaskGroup label="Quá hạn" tasks={overdue} variant="overdue" />
-          <TaskGroup label="Hôm nay" tasks={todayTasks} variant="today" />
-          <TaskGroup label="7 ngày tới" tasks={upcoming} variant="upcoming" />
+        <div className="space-y-5">
+          <Group title="Quá hạn" tasks={overdue} user={user} />
+          <Group title="Hôm nay" tasks={dueToday} user={user} />
+          <Group title="7 ngày tới" tasks={soon} user={user} />
+          <Group title="Sau đó" tasks={later} user={user} />
         </div>
       )}
     </div>
   )
 }
 
-function TaskGroup({
-  label,
-  tasks,
-  variant,
-}: {
-  label: string
-  tasks: Array<{ id: string; title: string; dueDate: Date; priority: string; project: { name: string } }>
-  variant: 'overdue' | 'today' | 'upcoming'
-}) {
-  if (tasks.length === 0) return null
-
-  const colors = {
-    overdue: 'text-red-700 bg-red-50 border-red-100',
-    today: 'text-blue-700 bg-blue-50 border-blue-100',
-    upcoming: 'text-gray-700 bg-gray-50 border-gray-100',
-  }
-
+function Tile({ label, value, danger }: { label: string; value: number; danger?: boolean }) {
   return (
-    <div>
-      <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-md text-xs font-medium mb-2 border ${colors[variant]}`}>
-        {label} · {tasks.length}
-      </div>
-      <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-        {tasks.map((task) => (
-          <div key={task.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
-            <div>
-              <p className="text-sm font-medium text-gray-900">{task.title}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{task.project.name}</p>
-            </div>
-            <div className="text-xs text-gray-400 text-right">
-              <p>{formatDate(task.dueDate)}</p>
-              <PriorityBadge priority={task.priority} />
-            </div>
-          </div>
-        ))}
-      </div>
+    <div className="bg-white rounded-xl border border-gray-200 p-4">
+      <div className={`text-2xl font-bold ${danger && value > 0 ? 'text-red-600' : ''}`}>{value}</div>
+      <div className="text-xs text-gray-500 mt-1">{label}</div>
     </div>
   )
 }
 
-function PriorityBadge({ priority }: { priority: string }) {
-  if (priority === 'HIGH') return <span className="text-red-500 font-medium">Cao</span>
-  if (priority === 'LOW') return <span className="text-gray-400">Thấp</span>
-  return null
+type Row = {
+  id: string
+  title: string
+  status: string
+  dueDate: Date
+  ownerId: string | null
+  project: { id: string; name: string; departmentId: string }
+}
+
+function Group({
+  title,
+  tasks,
+  user,
+}: {
+  title: string
+  tasks: Row[]
+  user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
+}) {
+  if (tasks.length === 0) return null
+  return (
+    <section>
+      <h2 className="text-sm font-semibold text-gray-700 mb-2">
+        {title} · {tasks.length}
+      </h2>
+      <ul className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+        {tasks.map((t) => (
+          <li key={t.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{t.title}</p>
+              <Link href={`/du-an/${t.project.id}`} className="text-xs text-gray-500 hover:underline">
+                {t.project.name}
+              </Link>
+            </div>
+            <div className="flex items-center gap-3">
+              <DueBadge dueDate={t.dueDate} status={t.status} />
+              <TaskStatusSelect
+                taskId={t.id}
+                taskTitle={t.title}
+                status={t.status}
+                canEdit={can(user, 'task:update', { departmentId: t.project.departmentId, ownerId: t.ownerId })}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
 }

@@ -1,0 +1,157 @@
+name: App A – cổng kiểm tra (G1)
+
+# Mọi thay đổi ở app/ phải qua cổng này trước khi vào main.
+on:
+  push:
+    branches: [main, 'fix/**', 'feat/**']
+    paths: ['app/**', '.github/workflows/app-ci.yml']
+  pull_request:
+    paths: ['app/**', '.github/workflows/app-ci.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: app-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  verify:
+    name: Cài đặt · kiểm tra kiểu · lint · build · e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: viec
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: viec_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U viec -d viec_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.21
+        env:
+          MP_SMTP_AUTH_ACCEPT_ANY: '1'
+          MP_SMTP_AUTH_ALLOW_INSECURE: '1'
+        ports: ['1025:1025', '8025:8025']
+
+    env:
+      DATABASE_URL: postgresql://viec:ci-password@localhost:5432/viec_ci
+      NEXTAUTH_URL: http://localhost:3000
+      AUTH_TRUST_HOST: 'true'
+      SMTP_HOST: localhost
+      SMTP_PORT: '1025'
+      SMTP_USER: ci
+      SMTP_PASS: ci
+      SMTP_FROM: 'Việc nội bộ CI <no-reply@example.test>'
+      BRAND_NAME: Việc nội bộ
+      NEXT_PUBLIC_BRAND_NAME: Việc nội bộ
+      SEED_ADMIN_EMAIL: admin@example.test
+      SEED_ADMIN_NAME: Admin CI
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sinh secret phiên cho lần chạy này
+        run: |
+          S="$(openssl rand -hex 32)"
+          echo "::add-mask::$S"
+          echo "AUTH_SECRET=$S" >> "$GITHUB_ENV"
+          echo "NEXTAUTH_SECRET=$S" >> "$GITHUB_ENV"
+
+      - name: Cài gói (npm ci nếu đã có lockfile)
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            echo "::warning::Chưa có package-lock.json — sinh mới"
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Lưu lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-lock
+          path: app/package-lock.json
+
+      - name: Kiểm tra schema Prisma
+        run: npx prisma validate
+
+      - name: Kiểm tra kiểu TypeScript
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build Next.js
+        run: npm run build
+
+      - name: Migration + seed vào Postgres thật
+        run: |
+          npx prisma migrate deploy
+          npm run db:seed
+          # Database sau khi chạy migration phải khớp đúng schema.prisma
+          npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code \
+            && echo "Schema khớp migration" \
+            || { echo "::error::schema.prisma lệch so với migrations"; exit 1; }
+
+      - name: Chạy bản build standalone (giống Docker)
+        run: |
+          cp -r .next/static .next/standalone/.next/static
+          cp -r public .next/standalone/public
+          PORT=3000 HOSTNAME=0.0.0.0 NODE_ENV=production nohup node .next/standalone/server.js > server.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000/api/healthz && exit 0
+            sleep 1
+          done
+          echo "::error::Server không lên"; cat server.log; exit 1
+
+      - name: Cài Chromium cho Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Kiểm thử end-to-end
+        run: npm run test:e2e
+
+      - name: Log server
+        if: always()
+        run: cat server.log || true
+
+      - name: Lưu báo cáo e2e
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            app/playwright-report
+            app/test-results
+          if-no-files-found: ignore
+
+  docker:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lấy lockfile từ job verify (nếu repo chưa có)
+        uses: actions/download-artifact@v4
+        with:
+          name: package-lock
+          path: app-lock
+      - name: Đặt lockfile
+        working-directory: .
+        run: '[ -f app/package-lock.json ] || cp app-lock/package-lock.json app/package-lock.json'
+      - name: docker build
+        working-directory: .
+        run: docker build -t viec-app:ci ./app

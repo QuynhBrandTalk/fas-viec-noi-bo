@@ -1,180 +1,97 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
+import { NextRequest } from 'next/server'
+import { z } from 'zod'
+import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { can } from '@/lib/rbac'
-import { z } from 'zod'
+import {
+  badRequest,
+  dateString,
+  forbidden,
+  json,
+  logActivity,
+  notFound,
+  readJson,
+  serverError,
+  unauthorized,
+} from '@/lib/api'
 
-interface RouteContext {
-  params: { id: string }
+type Ctx = { params: { id: string } }
+
+async function findProject(id: string) {
+  return prisma.project.findFirst({
+    where: { id, deletedAt: null },
+    include: { department: { select: { id: true, name: true } } },
+  })
 }
 
-// ─── GET /api/projects/[id] ──────────────────────────────────────────────────
-
-export async function GET(req: NextRequest, { params }: RouteContext) {
+export async function GET(_req: NextRequest, { params }: Ctx) {
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const project = await prisma.project.findUnique({
-      where: { id: params.id },
-      include: { department: { select: { id: true, name: true } } },
-    })
-
-    if (!project || project.deletedAt) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
-
-    // RBAC: MANAGER xem phòng ban mình, ADMIN xem tất cả, MEMBER không xem
-    if (session.user.role === 'MEMBER') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-    if (session.user.role === 'MANAGER' && project.departmentId !== session.user.departmentId) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    return NextResponse.json(project)
-  } catch (error) {
-    console.error('GET /api/projects/[id] error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    const project = await findProject(params.id)
+    if (!project) return notFound()
+    return json(project)
+  } catch (err) {
+    return serverError('GET /api/projects/[id]', err)
   }
 }
 
-// ─── PATCH /api/projects/[id] ───────────────────────────────────────────────
-
-const UpdateProjectSchema = z.object({
-  name: z.string().min(1).max(200).optional(),
-  endDate: z.string().datetime().optional(),
+const UpdateProject = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  startDate: dateString.optional(),
+  endDate: dateString.optional(),
 })
 
-export async function PATCH(req: NextRequest, { params }: RouteContext) {
+export async function PATCH(req: NextRequest, { params }: Ctx) {
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    const project = await findProject(params.id)
+    if (!project) return notFound()
+    if (!can(user, 'project:update', { departmentId: project.departmentId })) return forbidden()
 
-    const project = await prisma.project.findUnique({
-      where: { id: params.id },
-      select: { departmentId: true, ownerId: true, startDate: true, deletedAt: true },
-    })
-
-    if (!project || project.deletedAt) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
-
-    // RBAC: MANAGER của phòng ban hoặc ADMIN
-    if (session.user.role === 'MANAGER' && project.departmentId !== session.user.departmentId) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-    if (session.user.role === 'MEMBER') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    const body = await req.json()
-    const parsed = UpdateProjectSchema.safeParse(body)
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid input', details: parsed.error.flatten() }, { status: 400 })
-    }
-
-    const { name, endDate } = parsed.data
-
-    // Validate ngày nếu update
-    if (endDate) {
-      const end = new Date(endDate)
-      if (project.startDate >= end) {
-        return NextResponse.json({ error: 'endDate phải sau startDate' }, { status: 400 })
-      }
-    }
-
-    const before = await prisma.project.findUnique({ where: { id: params.id } })
+    const parsed = UpdateProject.safeParse(await readJson(req))
+    if (!parsed.success) return badRequest('Dữ liệu không hợp lệ', parsed.error.flatten())
+    const startDate = parsed.data.startDate ?? project.startDate
+    const endDate = parsed.data.endDate ?? project.endDate
+    if (endDate < startDate) return badRequest('Ngày kết thúc không được trước ngày bắt đầu')
 
     const updated = await prisma.project.update({
-      where: { id: params.id },
-      data: {
-        ...(name && { name }),
-        ...(endDate && { endDate: new Date(endDate) }),
-      },
-      include: { department: { select: { name: true } } },
+      where: { id: project.id },
+      data: { name: parsed.data.name ?? project.name, startDate, endDate },
+      include: { department: { select: { id: true, name: true } } },
     })
-
-    // Ghi ActivityLog (best-effort, don't block on failure)
-    try {
-      await prisma.activityLog.create({
-        data: {
-          actorId: session.user.id,
-          entity: 'project',
-          entityId: params.id,
-          action: 'update',
-          before: {
-            name: before?.name,
-            endDate: before?.endDate,
-          },
-          after: {
-            name: updated.name,
-            endDate: updated.endDate,
-          },
-        },
-      })
-    } catch (logErr) {
-      console.warn('ActivityLog create failed:', logErr)
-    }
-
-    return NextResponse.json(updated)
-  } catch (error) {
-    console.error('PATCH /api/projects/[id] error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    await logActivity({
+      actorId: user.id,
+      entity: 'project',
+      entityId: project.id,
+      action: 'update',
+      before: { name: project.name, startDate: project.startDate.toISOString(), endDate: project.endDate.toISOString() },
+      after: { name: updated.name, startDate: updated.startDate.toISOString(), endDate: updated.endDate.toISOString() },
+    })
+    return json(updated)
+  } catch (err) {
+    return serverError('PATCH /api/projects/[id]', err)
   }
 }
 
-// ─── DELETE /api/projects/[id] (soft delete) ────────────────────────────────
-
-export async function DELETE(req: NextRequest, { params }: RouteContext) {
+// Xoá mềm — chỉ ADMIN (theo kiến trúc)
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    const project = await findProject(params.id)
+    if (!project) return notFound()
+    if (!can(user, 'project:delete', { departmentId: project.departmentId })) return forbidden()
 
-    const project = await prisma.project.findUnique({
-      where: { id: params.id },
-      select: { ownerId: true, departmentId: true },
-    })
-
-    if (!project) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
-
-    // RBAC: chỉ creator hoặc ADMIN
-    if (session.user.role !== 'ADMIN' && project.ownerId !== session.user.id) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    // Soft delete: set deletedAt (như tasks, cho consistency)
-    // Không xóa thật — các query sẽ filter deletedAt: null
-    const deleted = await prisma.project.update({
-      where: { id: params.id },
-      data: { deletedAt: new Date() },
-    })
-
-    // Ghi ActivityLog (best-effort, don't block on failure)
-    try {
-      await prisma.activityLog.create({
-        data: {
-          actorId: session.user.id,
-          entity: 'project',
-          entityId: params.id,
-          action: 'delete',
-        },
-      })
-    } catch (logErr) {
-      console.warn('ActivityLog create failed:', logErr)
-    }
-
-    return NextResponse.json({ message: 'Project deleted', data: deleted })
-  } catch (error) {
-    console.error('DELETE /api/projects/[id] error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    const now = new Date()
+    await prisma.$transaction([
+      prisma.project.update({ where: { id: project.id }, data: { deletedAt: now } }),
+      prisma.task.updateMany({ where: { projectId: project.id, deletedAt: null }, data: { deletedAt: now } }),
+    ])
+    await logActivity({ actorId: user.id, entity: 'project', entityId: project.id, action: 'delete' })
+    return json({ ok: true })
+  } catch (err) {
+    return serverError('DELETE /api/projects/[id]', err)
   }
 }

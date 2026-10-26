@@ -1,218 +1,131 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { NextRequest } from 'next/server'
 import { z } from 'zod'
+import { getCurrentUser } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { can } from '@/lib/rbac'
+import {
+  badRequest,
+  dateString,
+  durationDays,
+  forbidden,
+  json,
+  logActivity,
+  notFound,
+  readJson,
+  serverError,
+  unauthorized,
+} from '@/lib/api'
 
-interface RouteContext {
-  params: { id: string }
+type Ctx = { params: { id: string } }
+
+async function findTask(id: string) {
+  return prisma.task.findFirst({
+    where: { id, deletedAt: null, project: { deletedAt: null } },
+    include: {
+      project: { select: { id: true, name: true, departmentId: true } },
+      owner: { select: { id: true, fullName: true } },
+      links: { select: { id: true, title: true, url: true, linkedTaskId: true, createdAt: true } },
+    },
+  })
 }
 
-// ─── GET /api/tasks/[id] ──────────────────────────────────────────────────────
-
-export async function GET(req: NextRequest, { params }: RouteContext) {
+export async function GET(_req: NextRequest, { params }: Ctx) {
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const task = await prisma.task.findUnique({
-      where: { id: params.id },
-      include: {
-        project: { select: { id: true, name: true, departmentId: true } },
-        owner: { select: { id: true, fullName: true } },
-        taskLinks: { select: { id: true, linkedTaskId: true } },
-      },
-    })
-
-    if (!task || task.deletedAt) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
-
-    // RBAC: MEMBER see own tasks, MANAGER see dept tasks, ADMIN see all
-    if (session.user.role === 'MEMBER' && task.ownerId !== session.user.id) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-    if (session.user.role === 'MANAGER' && task.project.departmentId !== session.user.departmentId) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    return NextResponse.json(task)
-  } catch (error) {
-    console.error('GET /api/tasks/[id] error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    const task = await findTask(params.id)
+    if (!task) return notFound()
+    return json(task)
+  } catch (err) {
+    return serverError('GET /api/tasks/[id]', err)
   }
 }
 
-// ─── PATCH /api/tasks/[id] ────────────────────────────────────────────────────
-
-const UpdateTaskSchema = z.object({
-  status: z.enum(['TODO', 'IN_PROGRESS', 'DONE']).optional(),
+const UpdateTask = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  description: z.string().max(5000).nullable().optional(),
+  status: z.enum(['TODO', 'DOING', 'DONE']).optional(),
   priority: z.enum(['LOW', 'NORMAL', 'HIGH']).optional(),
-  ownerId: z.string().uuid().optional(),
+  progress: z.number().int().min(0).max(100).optional(),
+  ownerId: z.string().min(1).nullable().optional(),
+  startDate: dateString.optional(),
+  dueDate: dateString.optional(),
 })
 
-export async function PATCH(req: NextRequest, { params }: RouteContext) {
+export async function PATCH(req: NextRequest, { params }: Ctx) {
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    const task = await findTask(params.id)
+    if (!task) return notFound()
 
-    const task = await prisma.task.findUnique({
-      where: { id: params.id },
-      select: { id: true, projectId: true, ownerId: true, status: true, priority: true, deletedAt: true },
-    })
+    const resource = { departmentId: task.project.departmentId, ownerId: task.ownerId }
+    if (!can(user, 'task:update', resource)) return forbidden()
 
-    if (!task || task.deletedAt) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
+    const parsed = UpdateTask.safeParse(await readJson(req))
+    if (!parsed.success) return badRequest('Dữ liệu không hợp lệ', parsed.error.flatten())
+    const input = parsed.data
 
-    // Get project dept
-    const project = await prisma.project.findUnique({
-      where: { id: task.projectId },
-      select: { departmentId: true },
-    })
-
-    if (!project) {
-      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
-    }
-
-    // RBAC: owner, MANAGER of dept, or ADMIN
-    const isOwner = task.ownerId === session.user.id
-    const isManager = session.user.role === 'MANAGER' && project.departmentId === session.user.departmentId
-    const isAdmin = session.user.role === 'ADMIN'
-
-    if (!isOwner && !isManager && !isAdmin) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    const body = await req.json()
-    const parsed = UpdateTaskSchema.safeParse(body)
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid input', details: parsed.error.flatten() }, { status: 400 })
-    }
-
-    const { status, priority, ownerId } = parsed.data
-
-    // If changing ownerId, verify user exists in same dept
-    if (ownerId) {
-      const newOwner = await prisma.user.findUnique({
-        where: { id: ownerId },
-        select: { departmentId: true, active: true },
-      })
-
-      if (!newOwner || !newOwner.active || newOwner.departmentId !== project.departmentId) {
-        return NextResponse.json({ error: 'Invalid ownerId' }, { status: 400 })
+    // Đổi người phụ trách: chỉ ADMIN hoặc MANAGER của bộ phận
+    if (input.ownerId !== undefined && input.ownerId !== task.ownerId) {
+      if (!can(user, 'task:assign', resource)) return forbidden()
+      if (input.ownerId) {
+        const owner = await prisma.user.findFirst({ where: { id: input.ownerId, active: true }, select: { id: true } })
+        if (!owner) return badRequest('Người phụ trách không hợp lệ')
       }
     }
 
-    const before = await prisma.task.findUnique({ where: { id: params.id } })
+    const startDate = input.startDate ?? task.startDate
+    const dueDate = input.dueDate ?? task.dueDate
+    if (dueDate < startDate) return badRequest('Hạn hoàn thành không được trước ngày bắt đầu')
 
+    const progress = input.status === 'DONE' ? 100 : input.progress
     const updated = await prisma.task.update({
-      where: { id: params.id },
+      where: { id: task.id },
       data: {
-        ...(status && { status }),
-        ...(priority && { priority }),
-        ...(ownerId && { ownerId }),
+        ...(input.title !== undefined && { title: input.title }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.status !== undefined && { status: input.status }),
+        ...(input.priority !== undefined && { priority: input.priority }),
+        ...(progress !== undefined && { progress }),
+        ...(input.ownerId !== undefined && { ownerId: input.ownerId }),
+        startDate,
+        dueDate,
+        durationDays: durationDays(startDate, dueDate),
       },
       include: {
         project: { select: { id: true, name: true } },
         owner: { select: { id: true, fullName: true } },
       },
     })
-
-    // Ghi ActivityLog (best-effort, don't block on failure)
-    try {
-      await prisma.activityLog.create({
-        data: {
-          actorId: session.user.id,
-          entity: 'task',
-          entityId: params.id,
-          action: 'update',
-          before: {
-            status: before?.status,
-            priority: before?.priority,
-            ownerId: before?.ownerId,
-          },
-          after: {
-            status: updated.status,
-            priority: updated.priority,
-            ownerId: updated.ownerId,
-          },
-        },
-      })
-    } catch (logErr) {
-      console.warn('ActivityLog create failed:', logErr)
-    }
-
-    return NextResponse.json(updated)
-  } catch (error) {
-    console.error('PATCH /api/tasks/[id] error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    await logActivity({
+      actorId: user.id,
+      entity: 'task',
+      entityId: task.id,
+      action: 'update',
+      before: { status: task.status, priority: task.priority, ownerId: task.ownerId, dueDate: task.dueDate.toISOString() },
+      after: { status: updated.status, priority: updated.priority, ownerId: updated.ownerId, dueDate: updated.dueDate.toISOString() },
+    })
+    return json(updated)
+  } catch (err) {
+    return serverError('PATCH /api/tasks/[id]', err)
   }
 }
 
-// ─── DELETE /api/tasks/[id] (soft delete) ──────────────────────────────────────
-
-export async function DELETE(req: NextRequest, { params }: RouteContext) {
+// Xoá mềm — chỉ ADMIN (theo kiến trúc)
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    const task = await findTask(params.id)
+    if (!task) return notFound()
+    if (!can(user, 'task:delete', { departmentId: task.project.departmentId, ownerId: task.ownerId })) {
+      return forbidden()
     }
-
-    const task = await prisma.task.findUnique({
-      where: { id: params.id },
-      select: { id: true, projectId: true, ownerId: true, deletedAt: true },
-    })
-
-    if (!task || task.deletedAt) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
-
-    // Get project dept
-    const project = await prisma.project.findUnique({
-      where: { id: task.projectId },
-      select: { departmentId: true },
-    })
-
-    if (!project) {
-      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
-    }
-
-    // RBAC: owner, MANAGER of dept, or ADMIN
-    const isOwner = task.ownerId === session.user.id
-    const isManager = session.user.role === 'MANAGER' && project.departmentId === session.user.departmentId
-    const isAdmin = session.user.role === 'ADMIN'
-
-    if (!isOwner && !isManager && !isAdmin) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    // Soft delete
-    const deleted = await prisma.task.update({
-      where: { id: params.id },
-      data: { deletedAt: new Date() },
-    })
-
-    // Ghi ActivityLog (best-effort, don't block on failure)
-    try {
-      await prisma.activityLog.create({
-        data: {
-          actorId: session.user.id,
-          entity: 'task',
-          entityId: params.id,
-          action: 'delete',
-        },
-      })
-    } catch (logErr) {
-      console.warn('ActivityLog create failed:', logErr)
-    }
-
-    return NextResponse.json({ message: 'Task deleted', data: deleted })
-  } catch (error) {
-    console.error('DELETE /api/tasks/[id] error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    await prisma.task.update({ where: { id: task.id }, data: { deletedAt: new Date() } })
+    await logActivity({ actorId: user.id, entity: 'task', entityId: task.id, action: 'delete' })
+    return json({ ok: true })
+  } catch (err) {
+    return serverError('DELETE /api/tasks/[id]', err)
   }
 }

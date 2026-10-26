@@ -1,4 +1,4 @@
-import { auth } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { formatDate } from '@/lib/utils'
@@ -7,8 +7,8 @@ import type { Role } from '@prisma/client'
 import InviteUserForm from './InviteUserForm'
 
 export default async function NguoiDungPage() {
-  const session = await auth()
-  if (!session?.user || session.user.role !== 'ADMIN') {
+  const user = await getCurrentUser()
+  if (!user || u.role !== 'ADMIN') {
     redirect('/hom-nay')
   }
 
@@ -46,20 +46,20 @@ export default async function NguoiDungPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {users.map((user) => (
-              <tr key={user.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium text-gray-900">{user.fullName}</td>
-                <td className="px-4 py-3 text-gray-600">{user.email}</td>
+            {users.map((u) => (
+              <tr key={u.id} className="hover:bg-gray-50">
+                <td className="px-4 py-3 font-medium text-gray-900">{u.fullName}</td>
+                <td className="px-4 py-3 text-gray-600">{u.email}</td>
                 <td className="px-4 py-3">
-                  <RoleBadge role={user.role} />
+                  <RoleBadge role={u.role} />
                 </td>
-                <td className="px-4 py-3 text-gray-600">{user.department?.name ?? '—'}</td>
-                <td className="px-4 py-3 text-gray-400">{formatDate(user.lastLoginAt)}</td>
+                <td className="px-4 py-3 text-gray-600">{u.department?.name ?? '—'}</td>
+                <td className="px-4 py-3 text-gray-400">{formatDate(u.lastLoginAt)}</td>
                 <td className="px-4 py-3">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                    user.active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
+                    u.active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
                   }`}>
-                    {user.active ? 'Hoạt động' : 'Đã vô hiệu'}
+                    {u.active ? 'Hoạt động' : 'Đã vô hiệu'}
                   </span>
                 </td>
               </tr>

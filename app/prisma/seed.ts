@@ -1,58 +1,37 @@
 import { PrismaClient } from '@prisma/client'
 
+/**
+ * Dữ liệu khởi tạo: các bộ phận và một tài khoản ADMIN đầu tiên.
+ * Chạy lại nhiều lần vẫn an toàn (upsert).
+ *
+ *   SEED_ADMIN_EMAIL="ceo@congty.vn" SEED_ADMIN_NAME="CEO" npm run db:seed
+ */
 const prisma = new PrismaClient()
 
+const DEPARTMENTS = ['Ban Giám đốc', 'Kinh doanh', 'Marketing', 'Vận hành', 'Kỹ thuật', 'Pháp lý']
+
 async function main() {
-  console.log('🌱 Seeding database...')
+  const adminEmail = (process.env.SEED_ADMIN_EMAIL ?? '').trim().toLowerCase()
+  if (!adminEmail) throw new Error('Thiếu SEED_ADMIN_EMAIL')
+  const adminName = process.env.SEED_ADMIN_NAME?.trim() || 'Quản trị viên'
 
-  // Tạo bộ phận mẫu cho FAS
-  const departments = await Promise.all([
-    prisma.department.upsert({
-      where: { name: 'Ban Giám đốc' },
-      update: {},
-      create: { name: 'Ban Giám đốc' },
-    }),
-    prisma.department.upsert({
-      where: { name: 'Marketing' },
-      update: {},
-      create: { name: 'Marketing' },
-    }),
-    prisma.department.upsert({
-      where: { name: 'Sale' },
-      update: {},
-      create: { name: 'Sale' },
-    }),
-    prisma.department.upsert({
-      where: { name: 'Vận hành' },
-      update: {},
-      create: { name: 'Vận hành' },
-    }),
-    prisma.department.upsert({
-      where: { name: 'Kỹ thuật' },
-      update: {},
-      create: { name: 'Kỹ thuật' },
-    }),
-  ])
+  const departments = []
+  for (const name of DEPARTMENTS) {
+    departments.push(await prisma.department.upsert({ where: { name }, update: {}, create: { name } }))
+  }
 
-  console.log(`✅ ${departments.length} bộ phận`)
-
-  // Tạo tài khoản admin (CEO)
   const admin = await prisma.user.upsert({
-    where: { email: 'ceo@brandtalk.asia' },
-    update: {},
-    create: {
-      email: 'ceo@brandtalk.asia',
-      fullName: 'CEO FAS',
-      role: 'ADMIN',
-      departmentId: departments[0].id,
-    },
+    where: { email: adminEmail },
+    update: { role: 'ADMIN', active: true },
+    create: { email: adminEmail, fullName: adminName, role: 'ADMIN', departmentId: departments[0].id },
   })
 
-  console.log(`✅ Admin: ${admin.email}`)
-  console.log('\n🎉 Seed hoàn tất!')
-  console.log('\nĐể đăng nhập, vào trang /dang-nhap và nhập email: ceo@brandtalk.asia')
+  console.log(`Seed xong: ${departments.length} bộ phận, admin ${admin.email}`)
 }
 
 main()
-  .catch(console.error)
+  .catch((e) => {
+    console.error(e)
+    process.exit(1)
+  })
   .finally(() => prisma.$disconnect())
