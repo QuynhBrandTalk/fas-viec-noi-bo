@@ -73,10 +73,10 @@ jobs:
       - name: Cài gói (npm ci nếu đã có lockfile)
         run: |
           if [ -f package-lock.json ]; then
-            npm ci --no-audit --no-fund
+            bash ../.github/ci-step.sh npm-ci npm ci --no-audit --no-fund
           else
             echo "::warning::Chưa có package-lock.json — sinh mới"
-            npm install --no-audit --no-fund
+            bash ../.github/ci-step.sh npm-install npm install --no-audit --no-fund
           fi
 
       - name: Lưu lockfile
@@ -86,21 +86,21 @@ jobs:
           path: app/package-lock.json
 
       - name: Kiểm tra schema Prisma
-        run: npx prisma validate
+        run: bash ../.github/ci-step.sh prisma-validate npx prisma validate
 
       - name: Kiểm tra kiểu TypeScript
-        run: npm run typecheck
+        run: bash ../.github/ci-step.sh typecheck npm run typecheck
 
       - name: Lint
-        run: npm run lint
+        run: bash ../.github/ci-step.sh lint npm run lint
 
       - name: Build Next.js
-        run: npm run build
+        run: bash ../.github/ci-step.sh build npm run build
 
       - name: Migration + seed vào Postgres thật
         run: |
-          npx prisma migrate deploy
-          npm run db:seed
+          bash ../.github/ci-step.sh migrate npx prisma migrate deploy
+          bash ../.github/ci-step.sh seed npm run db:seed
           # Database sau khi chạy migration phải khớp đúng schema.prisma
           npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code \
             && echo "Schema khớp migration" \
@@ -115,17 +115,17 @@ jobs:
             curl -sf http://localhost:3000/api/healthz && exit 0
             sleep 1
           done
-          echo "::error::Server không lên"; cat server.log; exit 1
+          bash ../.github/ci-step.sh server-start cat server.log; echo "::error::Server không lên"; exit 1
 
       - name: Cài Chromium cho Playwright
         run: npx playwright install --with-deps chromium
 
       - name: Kiểm thử end-to-end
-        run: npm run test:e2e
+        run: bash ../.github/ci-step.sh e2e npm run test:e2e
 
-      - name: Log server
-        if: always()
-        run: cat server.log || true
+      - name: Log server khi e2e lỗi
+        if: failure()
+        run: bash ../.github/ci-step.sh server-log bash -c 'cat server.log; exit 1' || true
 
       - name: Lưu báo cáo e2e
         if: always()
@@ -154,4 +154,4 @@ jobs:
         run: '[ -f app/package-lock.json ] || cp app-lock/package-lock.json app/package-lock.json'
       - name: docker build
         working-directory: .
-        run: docker build -t viec-app:ci ./app
+        run: bash .github/ci-step.sh docker-build docker build -t viec-app:ci ./app
