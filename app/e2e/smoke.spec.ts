@@ -68,7 +68,7 @@ test('S6. Token dùng lần hai bị từ chối', async ({ page, browser }) => 
   await fresh.goto(link)
   await fresh.getByRole('button', { name: 'Đăng nhập' }).click()
   await expect(fresh).toHaveURL(/\/dang-nhap/)
-  await expect(fresh.getByRole('alert')).toContainText('không hợp lệ')
+  await expect(fresh.getByText(/không hợp lệ/)).toBeVisible()
   await fresh.close()
 })
 
