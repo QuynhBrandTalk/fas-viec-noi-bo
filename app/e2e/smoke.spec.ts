@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { isoDate, latestMagicLink, login, logout } from './helpers'
+import { isoDate, login, logout, newMagicLink, requestLink } from './helpers'
 
 /**
  * Bộ kiểm thử khói G1 — chạy tuần tự, mỗi bước dựa trên bước trước.
@@ -32,12 +32,8 @@ test('S3. API từ chối khi chưa đăng nhập', async ({ request }) => {
 })
 
 test('S4. Email chưa được mời nhận cùng phản hồi, không có thư', async ({ page }) => {
-  const startedAt = Date.now() - 1000
-  await page.goto('/dang-nhap')
-  await page.getByLabel('Email').fill('khongtontai@example.test')
-  await page.getByRole('button', { name: 'Gửi liên kết đăng nhập' }).click()
-  await expect(page.getByText('Kiểm tra hộp thư của bạn')).toBeVisible()
-  await expect(latestMagicLink(page.request, 'khongtontai@example.test', startedAt)).rejects.toThrow()
+  const seen = await requestLink(page, 'khongtontai@example.test')
+  await expect(newMagicLink(page.request, 'khongtontai@example.test', seen)).rejects.toThrow()
 })
 
 test('S5. Admin đăng nhập, mời Quản lý và Thành viên', async ({ page }) => {
