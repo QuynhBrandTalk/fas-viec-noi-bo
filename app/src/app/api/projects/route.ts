@@ -1,143 +1,94 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
+import { NextRequest } from 'next/server'
+import { z } from 'zod'
+import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { can } from '@/lib/rbac'
-import { z } from 'zod'
+import {
+  badRequest,
+  dateString,
+  forbidden,
+  guardMutation,
+  json,
+  logActivity,
+  readJson,
+  serverError,
+  unauthorized,
+} from '@/lib/api'
 
-// ─── GET /api/projects?page=1&limit=50&departmentId=...&status=... ──────────────
-
-const GetProjectsSchema = z.object({
+const ListQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  departmentId: z.string().optional(),
+  departmentId: z.string().min(1).optional(),
 })
+const PAGE_SIZE = 50
 
+// GET /api/projects — mọi người dùng xem được tất cả dự án (theo kiến trúc)
 export async function GET(req: NextRequest) {
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
 
-    // Validate query params
-    const parsed = GetProjectsSchema.safeParse(Object.fromEntries(req.nextUrl.searchParams))
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid query params', details: parsed.error.flatten() }, { status: 400 })
-    }
+    const parsed = ListQuery.safeParse(Object.fromEntries(req.nextUrl.searchParams))
+    if (!parsed.success) return badRequest('Tham số không hợp lệ', parsed.error.flatten())
+    const { page, departmentId } = parsed.data
 
-    const { page, limit, departmentId } = parsed.data
-
-    // RBAC: MANAGER xem phòng ban mình, ADMIN xem tất cả
-    let filter: any = { deletedAt: null }
-
-    if (session.user.role === 'MANAGER') {
-      filter.departmentId = session.user.departmentId
-    } else if (session.user.role === 'MEMBER') {
-      // MEMBER không xem được project list (chỉ xem task của mình)
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-    if (departmentId && session.user.role === 'MANAGER') {
-      // MANAGER chỉ xem được phòng ban của mình
-      if (departmentId !== session.user.departmentId) {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-      }
-    }
-    if (departmentId && session.user.role === 'ADMIN') {
-      filter.departmentId = departmentId
-    }
-
-    const skip = (page - 1) * limit
-
-    const [projects, total] = await Promise.all([
+    const where = { deletedAt: null, ...(departmentId ? { departmentId } : {}) }
+    const [data, total] = await Promise.all([
       prisma.project.findMany({
-        where: filter,
-        include: {
-          department: { select: { name: true } },
-        },
+        where,
+        include: { department: { select: { id: true, name: true } } },
         orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
+        skip: (page - 1) * PAGE_SIZE,
+        take: PAGE_SIZE,
       }),
-      prisma.project.count({ where: filter }),
+      prisma.project.count({ where }),
     ])
-
-    return NextResponse.json({
-      data: projects,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    })
-  } catch (error) {
-    console.error('GET /api/projects error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return json({ data, pagination: { page, pageSize: PAGE_SIZE, total, totalPages: Math.ceil(total / PAGE_SIZE) } })
+  } catch (err) {
+    return serverError('GET /api/projects', err)
   }
 }
 
-// ─── POST /api/projects ──────────────────────────────────────────────────────
-
-const CreateProjectSchema = z.object({
-  name: z.string().min(1).max(200),
-  startDate: z.string().datetime(),
-  endDate: z.string().datetime(),
-  departmentId: z.string(),
+const CreateProject = z.object({
+  name: z.string().trim().min(1, 'Tên dự án không được trống').max(200),
+  departmentId: z.string().min(1, 'Chọn bộ phận'),
+  startDate: dateString,
+  endDate: dateString,
 })
 
+// POST /api/projects — ADMIN, hoặc MANAGER trong bộ phận mình
 export async function POST(req: NextRequest) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
 
-    // RBAC: chỉ ADMIN/MANAGER tạo project
-    if (session.user.role === 'MEMBER') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
+    const parsed = CreateProject.safeParse(await readJson(req))
+    if (!parsed.success) return badRequest(parsed.error.errors[0]?.message ?? 'Dữ liệu không hợp lệ', parsed.error.flatten())
+    const { name, departmentId, startDate, endDate } = parsed.data
 
-    const body = await req.json()
-    const parsed = CreateProjectSchema.safeParse(body)
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid input', details: parsed.error.flatten() }, { status: 400 })
-    }
+    if (!can(user, 'project:create', { departmentId })) return forbidden()
+    if (endDate < startDate) return badRequest('Ngày kết thúc không được trước ngày bắt đầu')
 
-    const { name, startDate, endDate, departmentId } = parsed.data
+    const dept = await prisma.department.findFirst({ where: { id: departmentId, active: true }, select: { id: true } })
+    if (!dept) return badRequest('Bộ phận không tồn tại')
 
-    // RBAC: MANAGER chỉ tạo trong phòng ban của mình
-    if (session.user.role === 'MANAGER' && departmentId !== session.user.departmentId) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    // Validate ngày
-    const start = new Date(startDate)
-    const end = new Date(endDate)
-    if (start >= end) {
-      return NextResponse.json({ error: 'startDate phải trước endDate' }, { status: 400 })
-    }
-
-    // Tạo project
-    const project = await prisma.project.create({
-      data: {
-        name,
-        ownerId: session.user.id,
-        departmentId,
-        startDate: start,
-        endDate: end,
-      },
-      include: { department: { select: { name: true } } },
-    })
-
-    // Ghi ActivityLog
-    await prisma.activityLog.create({
-      data: {
-        actorId: session.user.id,
+    const project = await prisma.$transaction(async (tx) => {
+      const created = await tx.project.create({
+        data: { name, departmentId, startDate, endDate, ownerId: user.id },
+        include: { department: { select: { id: true, name: true } } },
+      })
+      await logActivity(tx, {
+        actorId: user.id,
         entity: 'project',
-        entityId: project.id,
+        entityId: created.id,
         action: 'create',
-        after: { name, startDate, endDate, departmentId },
-      },
+        after: { name, departmentId, startDate: startDate.toISOString(), endDate: endDate.toISOString() },
+      })
+      return created
     })
-
-    return NextResponse.json(project, { status: 201 })
-  } catch (error) {
-    console.error('POST /api/projects error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return json(project, 201)
+  } catch (err) {
+    return serverError('POST /api/projects', err)
   }
 }

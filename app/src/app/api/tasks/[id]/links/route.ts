@@ -1,130 +1,105 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { NextRequest } from 'next/server'
 import { z } from 'zod'
+import { getCurrentUser } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { can } from '@/lib/rbac'
+import { isValidUrl } from '@/lib/utils'
+import {
+  badRequest,
+  forbidden,
+  guardMutation,
+  json,
+  logActivity,
+  notFound,
+  readJson,
+  serverError,
+  unauthorized,
+} from '@/lib/api'
 
-interface RouteContext {
-  params: { id: string }
+type Ctx = { params: { id: string } }
+
+async function findTask(id: string) {
+  return prisma.task.findFirst({
+    where: { id, deletedAt: null, project: { deletedAt: null } },
+    select: { id: true, ownerId: true, project: { select: { departmentId: true } } },
+  })
 }
 
-// ─── POST /api/tasks/[id]/links ────────────────────────────────────────────────
-
-const CreateTaskLinkSchema = z.object({
-  linkedTaskId: z.string().uuid('linkedTaskId phải là UUID'),
-})
-
-export async function POST(req: NextRequest, { params }: RouteContext) {
+export async function GET(_req: NextRequest, { params }: Ctx) {
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    const task = await findTask(params.id)
+    if (!task) return notFound()
+
+    const links = await prisma.taskLink.findMany({ where: { taskId: task.id }, orderBy: { createdAt: 'asc' } })
+    // Ẩn liên kết trỏ tới việc đã bị xoá mềm
+    const linkedIds = links.map((l) => l.linkedTaskId).filter((v): v is string => !!v)
+    const alive = new Set(
+      (
+        await prisma.task.findMany({
+          where: { id: { in: linkedIds }, deletedAt: null, project: { deletedAt: null } },
+          select: { id: true },
+        })
+      ).map((t) => t.id),
+    )
+    return json({ data: links.filter((l) => !l.linkedTaskId || alive.has(l.linkedTaskId)) })
+  } catch (err) {
+    return serverError('GET /api/tasks/[id]/links', err)
+  }
+}
+
+// Một link là: tài liệu (title + url https://) HOẶC liên kết tới việc khác (linkedTaskId)
+const CreateLink = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    url: z.string().trim().max(2000).optional(),
+    linkedTaskId: z.string().min(1).optional(),
+  })
+  .refine((v) => !!v.url !== !!v.linkedTaskId, 'Cần đúng một trong hai: url hoặc linkedTaskId')
+
+export async function POST(req: NextRequest, { params }: Ctx) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
+  try {
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
+    const task = await findTask(params.id)
+    if (!task) return notFound()
+    if (!can(user, 'task:update', { departmentId: task.project.departmentId, ownerId: task.ownerId })) {
+      return forbidden()
     }
 
-    const sourceTask = await prisma.task.findUnique({
-      where: { id: params.id },
-      select: { id: true, projectId: true, ownerId: true, deletedAt: true },
-    })
+    const parsed = CreateLink.safeParse(await readJson(req))
+    if (!parsed.success) return badRequest(parsed.error.errors[0]?.message ?? 'Dữ liệu không hợp lệ')
+    const { title, url, linkedTaskId } = parsed.data
 
-    if (!sourceTask || sourceTask.deletedAt) {
-      return NextResponse.json({ error: 'Source task not found' }, { status: 404 })
+    // Đặc tả M3: chỉ nhận https:// — từ chối http:, javascript:, ...
+    if (url && !isValidUrl(url)) return badRequest('Link phải bắt đầu bằng https://')
+
+    if (linkedTaskId) {
+      if (linkedTaskId === task.id) return badRequest('Không thể liên kết việc với chính nó')
+      const other = await findTask(linkedTaskId)
+      if (!other) return badRequest('Việc được liên kết không tồn tại')
+      const dup = await prisma.taskLink.findFirst({ where: { taskId: task.id, linkedTaskId } })
+      if (dup) return badRequest('Liên kết này đã tồn tại')
     }
 
-    const body = await req.json()
-    const parsed = CreateTaskLinkSchema.safeParse(body)
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid input', details: parsed.error.flatten() }, { status: 400 })
-    }
-
-    const { linkedTaskId } = parsed.data
-
-    // Prevent self-link
-    if (linkedTaskId === params.id) {
-      return NextResponse.json({ error: 'Cannot link task to itself' }, { status: 400 })
-    }
-
-    // Verify linked task exists
-    const linkedTask = await prisma.task.findUnique({
-      where: { id: linkedTaskId },
-      select: { id: true, projectId: true, deletedAt: true },
-    })
-
-    if (!linkedTask || linkedTask.deletedAt) {
-      return NextResponse.json({ error: 'Linked task not found' }, { status: 404 })
-    }
-
-    // Get source project for RBAC
-    const sourceProject = await prisma.project.findUnique({
-      where: { id: sourceTask.projectId },
-      select: { departmentId: true },
-    })
-
-    if (!sourceProject) {
-      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
-    }
-
-    // RBAC: owner, MANAGER of dept, or ADMIN
-    const isOwner = sourceTask.ownerId === session.user.id
-    const isManager = session.user.role === 'MANAGER' && sourceProject.departmentId === session.user.departmentId
-    const isAdmin = session.user.role === 'ADMIN'
-
-    if (!isOwner && !isManager && !isAdmin) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    // Check circular dependency (simple: linkedTask should not link back to sourceTask)
-    const reverseLink = await prisma.taskLink.findFirst({
-      where: {
-        taskId: linkedTaskId,
-        linkedTaskId: params.id,
-      },
-    })
-
-    if (reverseLink) {
-      return NextResponse.json({ error: 'Circular dependency detected' }, { status: 400 })
-    }
-
-    // Check duplicate
-    const existing = await prisma.taskLink.findFirst({
-      where: {
-        taskId: params.id,
-        linkedTaskId,
-      },
-    })
-
-    if (existing) {
-      return NextResponse.json({ error: 'Link already exists' }, { status: 400 })
-    }
-
-    // Create link
-    const link = await prisma.taskLink.create({
-      data: {
-        taskId: params.id,
-        linkedTaskId,
-        createdBy: session.user.id,
-      },
-    })
-
-    // ActivityLog (best-effort, don't block on failure)
-    try {
-      await prisma.activityLog.create({
-        data: {
-          actorId: session.user.id,
-          entity: 'taskLink',
-          entityId: link.id,
-          action: 'create',
-          after: {
-            taskId: link.taskId,
-            linkedTaskId: link.linkedTaskId,
-          },
-        },
+    const link = await prisma.$transaction(async (tx) => {
+      const created = await tx.taskLink.create({
+        data: { taskId: task.id, title: title ?? null, url: url ?? null, linkedTaskId: linkedTaskId ?? null, createdBy: user.id },
       })
-    } catch (logErr) {
-      console.warn('ActivityLog create failed:', logErr)
-    }
-
-    return NextResponse.json(link, { status: 201 })
-  } catch (error) {
-    console.error('POST /api/tasks/[id]/links error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+      await logActivity(tx, {
+        actorId: user.id,
+        entity: 'task_link',
+        entityId: created.id,
+        action: 'create',
+        after: { taskId: task.id, title: title ?? null, url: url ?? null, linkedTaskId: linkedTaskId ?? null },
+      })
+      return created
+    })
+    return json(link, 201)
+  } catch (err) {
+    return serverError('POST /api/tasks/[id]/links', err)
   }
 }

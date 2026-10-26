@@ -7,3 +7,8 @@
 backups/
 node_modules/
 secrets/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+test-results/
+playwright-report/

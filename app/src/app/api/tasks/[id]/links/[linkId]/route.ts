@@ -1,85 +1,41 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
+import { NextRequest } from 'next/server'
+import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { can } from '@/lib/rbac'
+import { forbidden, guardMutation, json, logActivity, notFound, serverError, unauthorized } from '@/lib/api'
 
-interface RouteContext {
-  params: { id: string; linkId: string }
-}
+type Ctx = { params: { id: string; linkId: string } }
 
-// ─── DELETE /api/tasks/[id]/links/[linkId] ────────────────────────────────────
-
-export async function DELETE(req: NextRequest, { params }: RouteContext) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
-    const session = await auth()
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const user = await getCurrentUser()
+    if (!user) return unauthorized()
 
-    // Verify link exists and belongs to this task
-    const link = await prisma.taskLink.findUnique({
-      where: { id: params.linkId },
-      select: { id: true, taskId: true, linkedTaskId: true },
+    const link = await prisma.taskLink.findFirst({
+      where: { id: params.linkId, taskId: params.id },
+      include: {
+        task: { select: { ownerId: true, deletedAt: true, project: { select: { departmentId: true, deletedAt: true } } } },
+      },
     })
-
-    if (!link || link.taskId !== params.id) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    if (!link || link.task.deletedAt || link.task.project.deletedAt) return notFound()
+    if (!can(user, 'task:update', { departmentId: link.task.project.departmentId, ownerId: link.task.ownerId })) {
+      return forbidden()
     }
 
-    // Get source task
-    const sourceTask = await prisma.task.findUnique({
-      where: { id: params.id },
-      select: { projectId: true, ownerId: true },
-    })
-
-    if (!sourceTask) {
-      return NextResponse.json({ error: 'Task not found' }, { status: 404 })
-    }
-
-    // Get source project for RBAC
-    const sourceProject = await prisma.project.findUnique({
-      where: { id: sourceTask.projectId },
-      select: { departmentId: true },
-    })
-
-    if (!sourceProject) {
-      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
-    }
-
-    // RBAC: owner, MANAGER of dept, or ADMIN
-    const isOwner = sourceTask.ownerId === session.user.id
-    const isManager = session.user.role === 'MANAGER' && sourceProject.departmentId === session.user.departmentId
-    const isAdmin = session.user.role === 'ADMIN'
-
-    if (!isOwner && !isManager && !isAdmin) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    // Delete link
-    await prisma.taskLink.delete({
-      where: { id: params.linkId },
-    })
-
-    // ActivityLog (best-effort, don't block on failure)
-    try {
-      await prisma.activityLog.create({
-        data: {
-          actorId: session.user.id,
-          entity: 'taskLink',
-          entityId: params.linkId,
-          action: 'delete',
-          before: {
-            taskId: link.taskId,
-            linkedTaskId: link.linkedTaskId,
-          },
-        },
+    await prisma.$transaction(async (tx) => {
+      await tx.taskLink.delete({ where: { id: link.id } })
+      await logActivity(tx, {
+        actorId: user.id,
+        entity: 'task_link',
+        entityId: link.id,
+        action: 'delete',
+        before: { taskId: link.taskId, title: link.title, url: link.url, linkedTaskId: link.linkedTaskId },
       })
-    } catch (logErr) {
-      console.warn('ActivityLog create failed:', logErr)
-    }
-
-    return NextResponse.json({ message: 'Link deleted' })
-  } catch (error) {
-    console.error('DELETE /api/tasks/[id]/links/[linkId] error:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    })
+    return json({ ok: true })
+  } catch (err) {
+    return serverError('DELETE /api/tasks/[id]/links/[linkId]', err)
   }
 }

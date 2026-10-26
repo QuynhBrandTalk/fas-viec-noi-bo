@@ -30,7 +30,8 @@ jobs:
             echo "POSTGRES_PASSWORD=ci-test-password-123"
             echo "POSTGRES_DB=viec"
             echo "DATABASE_URL=postgres://viec:ci-test-password-123@db:5432/viec"
-            echo "SESSION_SECRET=ci-test-secret-0123456789abcdefghijklmnop"
+            echo "AUTH_SECRET=ci-test-secret-0123456789abcdefghijklmnop0123456789"
+            echo "AUTH_URL=https://localhost"
             echo "SMTP_HOST=localhost"
             echo "SMTP_PORT=25"
             echo "SMTP_USER=ci"
@@ -63,7 +64,7 @@ jobs:
           exit 1
 
       - name: Kiểm tra qua Caddy (HTTPS nội bộ)
-        run: curl -fsk https://localhost/healthz
+        run: curl -fsk https://localhost/api/healthz
 
       - name: Kiểm tra đích sao lưu R2 (ghi, đọc, xoá)
         run: docker compose run --rm backup /scripts/check-target.sh

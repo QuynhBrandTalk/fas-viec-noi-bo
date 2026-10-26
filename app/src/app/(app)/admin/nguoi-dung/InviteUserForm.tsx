@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 
 interface Department {
   id: string
@@ -8,6 +9,7 @@ interface Department {
 }
 
 export default function InviteUserForm({ departments }: { departments: Department[] }) {
+  const router = useRouter()
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -32,6 +34,10 @@ export default function InviteUserForm({ departments }: { departments: Departmen
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       })
+      if (res.status === 401) {
+        window.location.href = '/dang-nhap?error=session'
+        return
+      }
       const data = await res.json()
 
       if (!res.ok) {
@@ -40,8 +46,7 @@ export default function InviteUserForm({ departments }: { departments: Departmen
         setSuccess(`Đã thêm ${form.fullName}. Họ có thể đăng nhập ngay khi nhập email.`)
         setForm({ email: '', fullName: '', role: 'MEMBER', departmentId: '' })
         setOpen(false)
-        // Reload để cập nhật danh sách
-        window.location.reload()
+        router.refresh()
       }
     } catch {
       setError('Không thể kết nối.')
@@ -71,9 +76,10 @@ export default function InviteUserForm({ departments }: { departments: Departmen
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Họ tên *</label>
+                <label htmlFor="inv-name" className="block text-sm font-medium text-gray-700 mb-1">Họ tên *</label>
                 <input
                   type="text"
+                  id="inv-name"
                   value={form.fullName}
                   onChange={(e) => setForm({ ...form, fullName: e.target.value })}
                   required
@@ -82,9 +88,10 @@ export default function InviteUserForm({ departments }: { departments: Departmen
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                <label htmlFor="inv-email" className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
                 <input
                   type="email"
+                  id="inv-email"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
                   required
@@ -93,8 +100,9 @@ export default function InviteUserForm({ departments }: { departments: Departmen
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Vai trò *</label>
+                <label htmlFor="inv-role" className="block text-sm font-medium text-gray-700 mb-1">Vai trò *</label>
                 <select
+                  id="inv-role"
                   value={form.role}
                   onChange={(e) => setForm({ ...form, role: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -105,8 +113,9 @@ export default function InviteUserForm({ departments }: { departments: Departmen
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Bộ phận</label>
+                <label htmlFor="inv-dept" className="block text-sm font-medium text-gray-700 mb-1">Bộ phận</label>
                 <select
+                  id="inv-dept"
                   value={form.departmentId}
                   onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"

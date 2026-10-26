@@ -1,8 +1,6 @@
-import type { NextConfig } from 'next'
-
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   output: 'standalone',
-  // Cho phép build trong Docker không cần biến env thật
   experimental: {
     serverComponentsExternalPackages: ['@prisma/client', 'nodemailer'],
   },

@@ -1,90 +1,70 @@
 import type { Role } from '@prisma/client'
 
-export interface PermissionContext {
+/**
+ * Ma trận quyền theo kiến trúc (bảng "Đăng nhập và phân quyền"):
+ *
+ * | Vai trò    | Xem việc | Sửa việc        | Quản lý người dùng | Xoá việc |
+ * |------------|----------|-----------------|--------------------|----------|
+ * | ADMIN      | Tất cả   | Tất cả          | Có                 | Có       |
+ * | MANAGER    | Tất cả   | Bộ phận mình    | Không              | Không    |
+ * | MEMBER     | Tất cả   | Việc được giao  | Không              | Không    |
+ *
+ * Luôn gọi phía server. Không tin kết quả từ client.
+ */
+
+export interface Actor {
+  id: string
   role: Role
-  departmentId?: string | null
-  userId?: string | null  // dùng để check MEMBER chỉ sửa task của mình
+  departmentId: string | null
 }
 
-export interface ResourceContext {
+export interface Resource {
   departmentId?: string | null
-  ownerId?: string | null   // người được giao task
-  createdBy?: string | null // người tạo
+  ownerId?: string | null
 }
 
-type Action =
-  | 'user:read'
-  | 'user:create'
-  | 'user:update'
-  | 'user:deactivate'
-  | 'project:create'
+export type Action =
   | 'project:read'
+  | 'project:create'
   | 'project:update'
   | 'project:delete'
-  | 'task:create'
   | 'task:read'
+  | 'task:create'
   | 'task:update'
+  | 'task:assign'
   | 'task:delete'
-  | 'report:read'
+  | 'user:read'
+  | 'user:manage'
 
-/**
- * Kiểm tra quyền phía server — luôn gọi trong Server Component / Route Handler,
- * không bao giờ tin kết quả từ client.
- *
- * ADMIN   : toàn quyền
- * MANAGER : quản lý trong phòng ban của mình
- * MEMBER  : chỉ xem + sửa task được giao cho mình
- */
-export function can(
-  user: PermissionContext,
-  action: Action,
-  resource?: ResourceContext,
-): boolean {
-  const { role, departmentId, userId } = user
+export function can(actor: Actor, action: Action, resource: Resource = {}): boolean {
+  if (actor.role === 'ADMIN') return true
 
-  if (role === 'ADMIN') return true
+  const sameDept = !!actor.departmentId && resource.departmentId === actor.departmentId
+  const isManager = actor.role === 'MANAGER'
 
   switch (action) {
-    // ── Người dùng ──────────────────────────────────────────────────────────
-    case 'user:read':
-      return role === 'MANAGER'
-    case 'user:create':
-    case 'user:update':
-    case 'user:deactivate':
-      return false // Chỉ ADMIN
-
-    // ── Dự án ────────────────────────────────────────────────────────────────
     case 'project:read':
-      return true // Tất cả đều xem được
-    case 'project:create':
-      return role === 'MANAGER'
-    case 'project:update':
-    case 'project:delete':
-      // MANAGER chỉ sửa/xóa dự án trong phòng ban của mình
-      return role === 'MANAGER' && resource?.departmentId === departmentId
-
-    // ── Công việc ─────────────────────────────────────────────────────────────
     case 'task:read':
-      return true // Tất cả đều xem được
-    case 'task:create':
-      return role === 'MANAGER'
-    case 'task:update':
-      if (role === 'MANAGER') {
-        // MANAGER sửa task trong phòng ban mình
-        return resource?.departmentId === departmentId
-      }
-      // MEMBER chỉ sửa task được giao cho mình
-      return (
-        resource?.ownerId === userId ||
-        resource?.createdBy === userId
-      )
-    case 'task:delete':
-      // MANAGER xóa task trong phòng ban mình
-      return role === 'MANAGER' && resource?.departmentId === departmentId
+      return true
 
-    // ── Báo cáo ──────────────────────────────────────────────────────────────
-    case 'report:read':
-      return role === 'MANAGER'
+    case 'project:create':
+    case 'project:update':
+    case 'task:create':
+    case 'task:assign':
+      return isManager && sameDept
+
+    case 'task:update':
+      // Quản lý sửa mọi việc của bộ phận mình; ai cũng sửa được việc mình phụ trách
+      if (isManager && sameDept) return true
+      return !!resource.ownerId && resource.ownerId === actor.id
+
+    case 'user:read':
+      return isManager
+
+    case 'project:delete':
+    case 'task:delete':
+    case 'user:manage':
+      return false
 
     default:
       return false
@@ -96,3 +76,15 @@ export const ROLE_LABELS: Record<Role, string> = {
   MANAGER: 'Quản lý',
   MEMBER: 'Thành viên',
 }
+
+export const STATUS_LABELS = {
+  TODO: 'Chưa làm',
+  DOING: 'Đang làm',
+  DONE: 'Hoàn thành',
+} as const
+
+export const PRIORITY_LABELS = {
+  LOW: 'Thấp',
+  NORMAL: 'Bình thường',
+  HIGH: 'Cao',
+} as const
