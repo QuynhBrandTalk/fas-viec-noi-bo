@@ -34,6 +34,10 @@ export default function InviteUserForm({ departments }: { departments: Departmen
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       })
+      if (res.status === 401) {
+        window.location.href = '/dang-nhap?error=session'
+        return
+      }
       const data = await res.json()
 
       if (!res.ok) {

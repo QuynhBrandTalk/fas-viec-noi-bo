@@ -41,6 +41,10 @@ export default function TaskForm({ projectId, users }: Props) {
           priority,
         }),
       })
+      if (res.status === 401) {
+        window.location.href = '/dang-nhap?error=session'
+        return
+      }
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error ?? 'Không lưu được')
       router.push(`/du-an/${projectId}`)

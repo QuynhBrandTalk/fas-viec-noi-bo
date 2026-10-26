@@ -32,6 +32,10 @@ export default function ProjectForm({ mode, departments, initial }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mode === 'create' ? { name, departmentId, startDate, endDate } : { name, startDate, endDate }),
       })
+      if (res.status === 401) {
+        window.location.href = '/dang-nhap?error=session'
+        return
+      }
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error ?? 'Không lưu được')
       router.push(`/du-an/${data.id}`)
