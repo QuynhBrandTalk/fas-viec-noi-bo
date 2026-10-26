@@ -1,6 +1,7 @@
 name: App A – cổng kiểm tra (G1)
 
 # Mọi thay đổi ở app/ phải qua cổng này trước khi vào main.
+# Migration: chỉ thêm migration mới (prisma migrate dev), không sửa migration đã có.
 on:
   push:
     branches: [main, 'fix/**', 'feat/**']
