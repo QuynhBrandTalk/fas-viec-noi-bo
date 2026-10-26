@@ -8,6 +8,7 @@ import {
   dateString,
   durationDays,
   forbidden,
+  guardMutation,
   json,
   logActivity,
   readJson,
@@ -36,9 +37,9 @@ export async function GET(req: NextRequest) {
     const where = {
       deletedAt: null,
       project: { deletedAt: null },
-      ...(projectId ? { projectId: projectId } : {}),
-      ...(ownerId ? { ownerId: ownerId } : {}),
-      ...(status ? { status: status } : {}),
+      ...(projectId ? { projectId } : {}),
+      ...(ownerId ? { ownerId } : {}),
+      ...(status ? { status } : {}),
     }
     const [data, total] = await Promise.all([
       prisma.task.findMany({
@@ -61,7 +62,7 @@ export async function GET(req: NextRequest) {
 
 const CreateTask = z.object({
   projectId: z.string().min(1),
-  title: z.string().trim().min(1, 'Tiêu đề không được trống').max(200),
+  title: z.string().trim().min(1, 'Tên việc không được trống').max(200),
   description: z.string().max(5000).optional(),
   ownerId: z.string().min(1).nullable().optional(),
   startDate: dateString,
@@ -71,6 +72,8 @@ const CreateTask = z.object({
 
 // POST /api/tasks — ADMIN, hoặc MANAGER của bộ phận sở hữu dự án
 export async function POST(req: NextRequest) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
@@ -94,30 +97,40 @@ export async function POST(req: NextRequest) {
       if (!owner) return badRequest('Người phụ trách không hợp lệ')
     }
 
-    const task = await prisma.task.create({
-      data: {
-        projectId,
-        title,
-        description: description || null,
-        ownerId: ownerId || null,
-        departmentId: project.departmentId,
-        startDate,
-        dueDate,
-        durationDays: durationDays(startDate, dueDate),
-        priority,
-        createdBy: user.id,
-      },
-      include: {
-        owner: { select: { id: true, fullName: true } },
-        project: { select: { id: true, name: true } },
-      },
-    })
-    await logActivity({
-      actorId: user.id,
-      entity: 'task',
-      entityId: task.id,
-      action: 'create',
-      after: { title, projectId, ownerId: ownerId ?? null, priority },
+    const task = await prisma.$transaction(async (tx) => {
+      const created = await tx.task.create({
+        data: {
+          projectId,
+          title,
+          description: description || null,
+          ownerId: ownerId || null,
+          departmentId: project.departmentId,
+          startDate,
+          dueDate,
+          durationDays: durationDays(startDate, dueDate),
+          priority,
+          createdBy: user.id,
+        },
+        include: {
+          owner: { select: { id: true, fullName: true } },
+          project: { select: { id: true, name: true } },
+        },
+      })
+      await logActivity(tx, {
+        actorId: user.id,
+        entity: 'task',
+        entityId: created.id,
+        action: 'create',
+        after: {
+          title,
+          projectId,
+          ownerId: ownerId ?? null,
+          priority,
+          startDate: startDate.toISOString(),
+          dueDate: dueDate.toISOString(),
+        },
+      })
+      return created
     })
     return json(task, 201)
   } catch (err) {

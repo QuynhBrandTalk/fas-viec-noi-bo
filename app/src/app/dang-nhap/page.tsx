@@ -1,10 +1,23 @@
+import { redirect } from 'next/navigation'
+import { getCurrentUser } from '@/lib/auth'
 import LoginForm from './LoginForm'
 
-export default function DangNhapPage({ searchParams }: { searchParams: { error?: string } }) {
+export const dynamic = 'force-dynamic'
+
+// Chỉ hiển thị thông báo cố định theo mã — không in nội dung tuỳ ý từ URL
+const ERRORS: Record<string, string> = {
+  link: 'Liên kết không hợp lệ, đã hết hạn hoặc đã được dùng. Vui lòng yêu cầu liên kết mới.',
+  session: 'Phiên làm việc đã hết hạn. Vui lòng đăng nhập lại.',
+}
+const DEFAULT_ERROR = 'Đăng nhập không thành công. Vui lòng thử lại.'
+
+export default async function DangNhapPage({ searchParams }: { searchParams: { error?: string } }) {
+  // Đã đăng nhập (và tài khoản còn hoạt động) thì vào thẳng app
+  if (await getCurrentUser()) redirect('/hom-nay')
+
   const brandName = process.env.BRAND_NAME ?? 'Việc nội bộ'
-  // Auth.js có thể gắn mã lỗi kỹ thuật (vd. CredentialsSignin) — đổi thành câu chung
-  const raw = searchParams.error ?? ''
-  const error = raw && /^[A-Za-z]+$/.test(raw) ? 'Đăng nhập không thành công. Vui lòng thử lại.' : raw
+  const code = searchParams.error
+  const error = code ? (ERRORS[code] ?? DEFAULT_ERROR) : ''
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">

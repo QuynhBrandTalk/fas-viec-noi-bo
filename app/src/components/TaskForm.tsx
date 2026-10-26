@@ -12,7 +12,8 @@ const input = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:
 
 export default function TaskForm({ projectId, users }: Props) {
   const router = useRouter()
-  const today = new Date().toISOString().slice(0, 10)
+  // "Hôm nay" theo giờ Việt Nam (toISOString là giờ UTC, lệch ngày trước 7h sáng)
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date())
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [ownerId, setOwnerId] = useState('')

@@ -123,6 +123,24 @@ test('S9. Kiểm tra dữ liệu đầu vào: hạn trước ngày bắt đầu 
   }
   const ok = await page.request.post(`/api/tasks/${task.id}/links`, { data: { title: 'Tài liệu', url: 'https://example.com/doc' } })
   expect(ok.status()).toBe(201)
+
+  // Ngày không tồn tại bị từ chối (không tự lùi sang tháng sau)
+  const badDate = await page.request.post('/api/tasks', {
+    data: { projectId: project.id, title: 'Ngày ảo', startDate: '2026-02-31', dueDate: '2026-03-05' },
+  })
+  expect(badDate.status()).toBe(400)
+
+  // Chống CSRF: body dạng text/plain (form HTML) và Origin lạ đều bị chặn
+  const plain = await page.request.post('/api/tasks', {
+    headers: { 'Content-Type': 'text/plain' },
+    data: JSON.stringify({ projectId: project.id, title: 'csrf', startDate: isoDate(0), dueDate: isoDate(0) }),
+  })
+  expect(plain.status()).toBe(415)
+  const foreign = await page.request.patch(`/api/tasks/${task.id}`, {
+    headers: { Origin: 'https://evil.example' },
+    data: { status: 'DONE' },
+  })
+  expect(foreign.status()).toBe(403)
   await logout(page)
 })
 
@@ -161,6 +179,12 @@ test('S11. Phân quyền: Thành viên không tạo/xoá được, người khá
   await login(page, MANAGER)
   expect((await page.request.delete(`/api/tasks/${task.id}`)).status()).toBe(403)
   await logout(page)
+})
+
+test('S12b. Trang đăng nhập không hiển thị nội dung tuỳ ý từ URL', async ({ page }) => {
+  await page.goto('/dang-nhap?error=' + encodeURIComponent('Hãy gọi 0900 000 000 để nhận thưởng'))
+  await expect(page.getByText('Hãy gọi 0900')).toHaveCount(0)
+  await expect(page.getByText('Đăng nhập không thành công')).toBeVisible()
 })
 
 test('S12. Admin xem Bảng việc toàn công ty', async ({ page }) => {

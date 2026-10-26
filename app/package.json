@@ -13,11 +13,11 @@
     "typecheck": "prisma generate && tsc --noEmit",
     "db:migrate": "prisma migrate deploy",
     "db:generate": "prisma generate",
-    "db:seed": "tsx prisma/seed.ts",
+    "db:seed": "node prisma/seed.mjs",
     "test:e2e": "playwright test"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "node prisma/seed.mjs"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",

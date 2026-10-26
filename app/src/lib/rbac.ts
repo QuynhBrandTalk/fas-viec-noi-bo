@@ -54,7 +54,8 @@ export function can(actor: Actor, action: Action, resource: Resource = {}): bool
       return isManager && sameDept
 
     case 'task:update':
-      if (isManager) return sameDept
+      // Quản lý sửa mọi việc của bộ phận mình; ai cũng sửa được việc mình phụ trách
+      if (isManager && sameDept) return true
       return !!resource.ownerId && resource.ownerId === actor.id
 
     case 'user:read':

@@ -7,6 +7,8 @@ import { formatDate } from '@/lib/utils'
 import DueBadge from '@/components/DueBadge'
 import TaskStatusSelect from '@/components/TaskStatusSelect'
 
+const LIMIT = 500
+
 export default async function DuAnChiTietPage({ params }: { params: { id: string } }) {
   const user = await getCurrentUser()
   if (!user) return null
@@ -21,7 +23,10 @@ export default async function DuAnChiTietPage({ params }: { params: { id: string
     where: { projectId: project.id, deletedAt: null },
     include: { owner: { select: { fullName: true } } },
     orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+    take: LIMIT + 1,
   })
+  const truncated = tasks.length > LIMIT
+  if (truncated) tasks.length = LIMIT
 
   const resource = { departmentId: project.departmentId }
   const canEditProject = can(user, 'project:update', resource)
@@ -51,6 +56,11 @@ export default async function DuAnChiTietPage({ params }: { params: { id: string
         </div>
       </div>
 
+      {truncated && (
+        <p className="text-sm bg-amber-50 text-amber-900 border border-amber-200 rounded-lg px-3 py-2">
+          Dự án có hơn {LIMIT} việc; đang hiển thị {LIMIT} việc có hạn sớm nhất.
+        </p>
+      )}
       {tasks.length === 0 ? (
         <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-sm text-gray-500">Dự án chưa có việc nào.</div>
       ) : (

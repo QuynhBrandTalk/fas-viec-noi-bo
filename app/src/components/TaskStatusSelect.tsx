@@ -36,6 +36,10 @@ export default function TaskStatusSelect({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: next }),
       })
+      if (res.status === 401) {
+        window.location.href = '/dang-nhap?error=session'
+        return
+      }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error ?? 'Không lưu được')

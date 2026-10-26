@@ -4,7 +4,17 @@ import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { can } from '@/lib/rbac'
 import { isValidUrl } from '@/lib/utils'
-import { badRequest, forbidden, json, logActivity, notFound, readJson, serverError, unauthorized } from '@/lib/api'
+import {
+  badRequest,
+  forbidden,
+  guardMutation,
+  json,
+  logActivity,
+  notFound,
+  readJson,
+  serverError,
+  unauthorized,
+} from '@/lib/api'
 
 type Ctx = { params: { id: string } }
 
@@ -21,8 +31,19 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
     if (!user) return unauthorized()
     const task = await findTask(params.id)
     if (!task) return notFound()
+
     const links = await prisma.taskLink.findMany({ where: { taskId: task.id }, orderBy: { createdAt: 'asc' } })
-    return json({ data: links })
+    // Ẩn liên kết trỏ tới việc đã bị xoá mềm
+    const linkedIds = links.map((l) => l.linkedTaskId).filter((v): v is string => !!v)
+    const alive = new Set(
+      (
+        await prisma.task.findMany({
+          where: { id: { in: linkedIds }, deletedAt: null, project: { deletedAt: null } },
+          select: { id: true },
+        })
+      ).map((t) => t.id),
+    )
+    return json({ data: links.filter((l) => !l.linkedTaskId || alive.has(l.linkedTaskId)) })
   } catch (err) {
     return serverError('GET /api/tasks/[id]/links', err)
   }
@@ -38,6 +59,8 @@ const CreateLink = z
   .refine((v) => !!v.url !== !!v.linkedTaskId, 'Cần đúng một trong hai: url hoặc linkedTaskId')
 
 export async function POST(req: NextRequest, { params }: Ctx) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
@@ -62,15 +85,18 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       if (dup) return badRequest('Liên kết này đã tồn tại')
     }
 
-    const link = await prisma.taskLink.create({
-      data: { taskId: task.id, title: title ?? null, url: url ?? null, linkedTaskId: linkedTaskId ?? null, createdBy: user.id },
-    })
-    await logActivity({
-      actorId: user.id,
-      entity: 'task_link',
-      entityId: link.id,
-      action: 'create',
-      after: { taskId: task.id, url: url ?? null, linkedTaskId: linkedTaskId ?? null },
+    const link = await prisma.$transaction(async (tx) => {
+      const created = await tx.taskLink.create({
+        data: { taskId: task.id, title: title ?? null, url: url ?? null, linkedTaskId: linkedTaskId ?? null, createdBy: user.id },
+      })
+      await logActivity(tx, {
+        actorId: user.id,
+        entity: 'task_link',
+        entityId: created.id,
+        action: 'create',
+        after: { taskId: task.id, title: title ?? null, url: url ?? null, linkedTaskId: linkedTaskId ?? null },
+      })
+      return created
     })
     return json(link, 201)
   } catch (err) {

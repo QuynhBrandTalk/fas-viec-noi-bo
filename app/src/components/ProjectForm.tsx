@@ -13,7 +13,8 @@ const input = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:
 
 export default function ProjectForm({ mode, departments, initial }: Props) {
   const router = useRouter()
-  const today = new Date().toISOString().slice(0, 10)
+  // "Hôm nay" theo giờ Việt Nam (toISOString là giờ UTC, lệch ngày trước 7h sáng)
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date())
   const [name, setName] = useState(initial?.name ?? '')
   const [departmentId, setDepartmentId] = useState(initial?.departmentId ?? (departments.length === 1 ? departments[0].id : ''))
   const [startDate, setStartDate] = useState(initial?.startDate ?? today)

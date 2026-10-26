@@ -3,7 +3,17 @@ import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { can } from '@/lib/rbac'
-import { badRequest, dateString, forbidden, json, logActivity, readJson, serverError, unauthorized } from '@/lib/api'
+import {
+  badRequest,
+  dateString,
+  forbidden,
+  guardMutation,
+  json,
+  logActivity,
+  readJson,
+  serverError,
+  unauthorized,
+} from '@/lib/api'
 
 const ListQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -21,7 +31,7 @@ export async function GET(req: NextRequest) {
     if (!parsed.success) return badRequest('Tham số không hợp lệ', parsed.error.flatten())
     const { page, departmentId } = parsed.data
 
-    const where = { deletedAt: null, ...(departmentId ? { departmentId: departmentId } : {}) }
+    const where = { deletedAt: null, ...(departmentId ? { departmentId } : {}) }
     const [data, total] = await Promise.all([
       prisma.project.findMany({
         where,
@@ -47,6 +57,8 @@ const CreateProject = z.object({
 
 // POST /api/projects — ADMIN, hoặc MANAGER trong bộ phận mình
 export async function POST(req: NextRequest) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
@@ -61,16 +73,19 @@ export async function POST(req: NextRequest) {
     const dept = await prisma.department.findFirst({ where: { id: departmentId, active: true }, select: { id: true } })
     if (!dept) return badRequest('Bộ phận không tồn tại')
 
-    const project = await prisma.project.create({
-      data: { name, departmentId, startDate, endDate, ownerId: user.id },
-      include: { department: { select: { id: true, name: true } } },
-    })
-    await logActivity({
-      actorId: user.id,
-      entity: 'project',
-      entityId: project.id,
-      action: 'create',
-      after: { name, departmentId, startDate: startDate.toISOString(), endDate: endDate.toISOString() },
+    const project = await prisma.$transaction(async (tx) => {
+      const created = await tx.project.create({
+        data: { name, departmentId, startDate, endDate, ownerId: user.id },
+        include: { department: { select: { id: true, name: true } } },
+      })
+      await logActivity(tx, {
+        actorId: user.id,
+        entity: 'project',
+        entityId: created.id,
+        action: 'create',
+        after: { name, departmentId, startDate: startDate.toISOString(), endDate: endDate.toISOString() },
+      })
+      return created
     })
     return json(project, 201)
   } catch (err) {

@@ -6,7 +6,9 @@ import { can } from '@/lib/rbac'
 import {
   badRequest,
   dateString,
+  diffFields,
   forbidden,
+  guardMutation,
   json,
   logActivity,
   notFound,
@@ -43,6 +45,8 @@ const UpdateProject = z.object({
 })
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
@@ -52,22 +56,27 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
     const parsed = UpdateProject.safeParse(await readJson(req))
     if (!parsed.success) return badRequest('Dữ liệu không hợp lệ', parsed.error.flatten())
-    const startDate = parsed.data.startDate ?? project.startDate
-    const endDate = parsed.data.endDate ?? project.endDate
+    const input = parsed.data
+    const startDate = input.startDate ?? project.startDate
+    const endDate = input.endDate ?? project.endDate
     if (endDate < startDate) return badRequest('Ngày kết thúc không được trước ngày bắt đầu')
 
-    const updated = await prisma.project.update({
-      where: { id: project.id },
-      data: { name: parsed.data.name ?? project.name, startDate, endDate },
-      include: { department: { select: { id: true, name: true } } },
-    })
-    await logActivity({
-      actorId: user.id,
-      entity: 'project',
-      entityId: project.id,
-      action: 'update',
-      before: { name: project.name, startDate: project.startDate.toISOString(), endDate: project.endDate.toISOString() },
-      after: { name: updated.name, startDate: updated.startDate.toISOString(), endDate: updated.endDate.toISOString() },
+    // Chỉ ghi các trường có trong yêu cầu
+    const data = {
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
+      ...(input.endDate !== undefined ? { endDate: input.endDate } : {}),
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.project.update({
+        where: { id: project.id },
+        data,
+        include: { department: { select: { id: true, name: true } } },
+      })
+      const diff = diffFields(project, data)
+      if (diff) await logActivity(tx, { actorId: user.id, entity: 'project', entityId: project.id, action: 'update', ...diff })
+      return row
     })
     return json(updated)
   } catch (err) {
@@ -75,8 +84,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   }
 }
 
-// Xoá mềm — chỉ ADMIN (theo kiến trúc)
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+// Xoá mềm — chỉ ADMIN (theo kiến trúc). Xoá dự án thì xoá mềm luôn các việc của dự án.
+export async function DELETE(req: NextRequest, { params }: Ctx) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
@@ -85,11 +96,17 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
     if (!can(user, 'project:delete', { departmentId: project.departmentId })) return forbidden()
 
     const now = new Date()
-    await prisma.$transaction([
-      prisma.project.update({ where: { id: project.id }, data: { deletedAt: now } }),
-      prisma.task.updateMany({ where: { projectId: project.id, deletedAt: null }, data: { deletedAt: now } }),
-    ])
-    await logActivity({ actorId: user.id, entity: 'project', entityId: project.id, action: 'delete' })
+    await prisma.$transaction(async (tx) => {
+      await tx.project.update({ where: { id: project.id }, data: { deletedAt: now } })
+      const tasks = await tx.task.updateMany({ where: { projectId: project.id, deletedAt: null }, data: { deletedAt: now } })
+      await logActivity(tx, {
+        actorId: user.id,
+        entity: 'project',
+        entityId: project.id,
+        action: 'delete',
+        after: { tasksDeleted: tasks.count },
+      })
+    })
     return json({ ok: true })
   } catch (err) {
     return serverError('DELETE /api/projects/[id]', err)

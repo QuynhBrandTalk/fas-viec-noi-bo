@@ -25,12 +25,10 @@ export const authConfig = {
       const { pathname } = request.nextUrl
       const loggedIn = !!auth?.user
 
-      if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
-        if (loggedIn && pathname === '/dang-nhap') {
-          return Response.redirect(new URL('/hom-nay', request.nextUrl))
-        }
-        return true
-      }
+      // Trang đăng nhập luôn mở. Việc chuyển người đã đăng nhập về /hom-nay
+      // do trang /dang-nhap tự làm sau khi kiểm tra database (người bị khoá
+      // vẫn có JWT hợp lệ, nếu chuyển ở đây sẽ tạo vòng lặp chuyển hướng).
+      if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) return true
       // false → Auth.js chuyển về trang signIn (/dang-nhap)
       return loggedIn
     },

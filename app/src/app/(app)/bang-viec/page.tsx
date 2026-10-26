@@ -6,6 +6,7 @@ import DueBadge from '@/components/DueBadge'
 import TaskStatusSelect from '@/components/TaskStatusSelect'
 
 const COLUMNS = ['TODO', 'DOING', 'DONE'] as const
+const LIMIT = 300
 
 export default async function BangViecPage({ searchParams }: { searchParams: { projectId?: string } }) {
   const user = await getCurrentUser()
@@ -22,12 +23,20 @@ export default async function BangViecPage({ searchParams }: { searchParams: { p
         department: { select: { name: true } },
       },
       orderBy: [{ dueDate: 'asc' }],
-      take: 300,
+      take: LIMIT + 1,
     }),
   ])
 
+  const truncated = tasks.length > LIMIT
+  if (truncated) tasks.length = LIMIT
+
   return (
     <div className="space-y-4">
+      {truncated && (
+        <p className="text-sm bg-amber-50 text-amber-900 border border-amber-200 rounded-lg px-3 py-2">
+          Đang hiển thị {LIMIT} việc có hạn sớm nhất. Chọn một dự án để xem đầy đủ.
+        </p>
+      )}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <h1 className="text-lg font-semibold">Bảng việc</h1>
         <form className="flex items-end gap-2" method="get">

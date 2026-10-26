@@ -6,8 +6,10 @@ import { can } from '@/lib/rbac'
 import {
   badRequest,
   dateString,
+  diffFields,
   durationDays,
   forbidden,
+  guardMutation,
   json,
   logActivity,
   notFound,
@@ -24,7 +26,6 @@ async function findTask(id: string) {
     include: {
       project: { select: { id: true, name: true, departmentId: true } },
       owner: { select: { id: true, fullName: true } },
-      links: { select: { id: true, title: true, url: true, linkedTaskId: true, createdAt: true } },
     },
   })
 }
@@ -53,6 +54,8 @@ const UpdateTask = z.object({
 })
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
@@ -75,36 +78,35 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
       }
     }
 
+    // Chỉ ghi ngày khi yêu cầu có gửi ngày — tránh ghi đè thay đổi của người khác
+    const datesChanged = input.startDate !== undefined || input.dueDate !== undefined
     const startDate = input.startDate ?? task.startDate
     const dueDate = input.dueDate ?? task.dueDate
-    if (dueDate < startDate) return badRequest('Hạn hoàn thành không được trước ngày bắt đầu')
+    if (datesChanged && dueDate < startDate) return badRequest('Hạn hoàn thành không được trước ngày bắt đầu')
 
     const progress = input.status === 'DONE' ? 100 : input.progress
-    const updated = await prisma.task.update({
-      where: { id: task.id },
-      data: {
-        ...(input.title !== undefined && { title: input.title }),
-        ...(input.description !== undefined && { description: input.description }),
-        ...(input.status !== undefined && { status: input.status }),
-        ...(input.priority !== undefined && { priority: input.priority }),
-        ...(progress !== undefined && { progress }),
-        ...(input.ownerId !== undefined && { ownerId: input.ownerId }),
-        startDate,
-        dueDate,
-        durationDays: durationDays(startDate, dueDate),
-      },
-      include: {
-        project: { select: { id: true, name: true } },
-        owner: { select: { id: true, fullName: true } },
-      },
-    })
-    await logActivity({
-      actorId: user.id,
-      entity: 'task',
-      entityId: task.id,
-      action: 'update',
-      before: { status: task.status, priority: task.priority, ownerId: task.ownerId, dueDate: task.dueDate.toISOString() },
-      after: { status: updated.status, priority: updated.priority, ownerId: updated.ownerId, dueDate: updated.dueDate.toISOString() },
+    const data = {
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(progress !== undefined ? { progress } : {}),
+      ...(input.ownerId !== undefined ? { ownerId: input.ownerId } : {}),
+      ...(datesChanged ? { startDate, dueDate, durationDays: durationDays(startDate, dueDate) } : {}),
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.task.update({
+        where: { id: task.id },
+        data,
+        include: {
+          project: { select: { id: true, name: true } },
+          owner: { select: { id: true, fullName: true } },
+        },
+      })
+      const diff = diffFields(task, data)
+      if (diff) await logActivity(tx, { actorId: user.id, entity: 'task', entityId: task.id, action: 'update', ...diff })
+      return row
     })
     return json(updated)
   } catch (err) {
@@ -113,7 +115,9 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 }
 
 // Xoá mềm — chỉ ADMIN (theo kiến trúc)
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
@@ -122,8 +126,10 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
     if (!can(user, 'task:delete', { departmentId: task.project.departmentId, ownerId: task.ownerId })) {
       return forbidden()
     }
-    await prisma.task.update({ where: { id: task.id }, data: { deletedAt: new Date() } })
-    await logActivity({ actorId: user.id, entity: 'task', entityId: task.id, action: 'delete' })
+    await prisma.$transaction(async (tx) => {
+      await tx.task.update({ where: { id: task.id }, data: { deletedAt: new Date() } })
+      await logActivity(tx, { actorId: user.id, entity: 'task', entityId: task.id, action: 'delete' })
+    })
     return json({ ok: true })
   } catch (err) {
     return serverError('DELETE /api/tasks/[id]', err)

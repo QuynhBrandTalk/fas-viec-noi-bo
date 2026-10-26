@@ -5,6 +5,7 @@ import crypto from 'crypto'
 import { authConfig } from '@/auth.config'
 import { prisma } from '@/lib/prisma'
 import { sendMagicLink } from '@/lib/mailer'
+import { appBaseUrl } from '@/lib/config'
 
 // Giới hạn gửi magic link: 5/email/giờ, 20/IP/giờ (theo đặc tả M2)
 const RATE_LIMIT_EMAIL = 5
@@ -133,10 +134,13 @@ export async function requestMagicLink(
     },
   })
 
-  const baseUrl = (process.env.NEXTAUTH_URL ?? process.env.APP_DOMAIN ?? '').replace(/\/$/, '')
-  const magicUrl = `${baseUrl}/auth/verify?token=${token}`
+  const magicUrl = `${appBaseUrl()}/auth/verify?token=${token}`
 
-  await sendMagicLink({ to: normalizedEmail, name: user.fullName, magicUrl })
+  // Gửi nền: thời gian phản hồi không phụ thuộc email có tồn tại hay không,
+  // và lỗi SMTP không lộ ra ngoài (chỉ ghi log, không ghi email/token).
+  void sendMagicLink({ to: normalizedEmail, name: user.fullName, magicUrl }).catch((err) =>
+    console.error('[magic-link] gửi email thất bại:', err instanceof Error ? err.message : err),
+  )
   return { ok: true }
 }
 

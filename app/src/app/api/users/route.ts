@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { can } from '@/lib/rbac'
-import { badRequest, forbidden, json, logActivity, readJson, serverError, unauthorized } from '@/lib/api'
+import { badRequest, forbidden, guardMutation, json, logActivity, readJson, serverError, unauthorized } from '@/lib/api'
 
 // GET /api/users — ADMIN và MANAGER
 export async function GET() {
@@ -39,6 +39,8 @@ const Invite = z.object({
 
 // POST /api/users — mời người dùng (chỉ ADMIN)
 export async function POST(req: NextRequest) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const user = await getCurrentUser()
     if (!user) return unauthorized()
@@ -54,11 +56,20 @@ export async function POST(req: NextRequest) {
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail }, select: { id: true } })
     if (existing) return json({ error: 'Email này đã có trong hệ thống' }, 409)
 
-    const created = await prisma.user.create({
-      data: { email: normalizedEmail, fullName, role, departmentId: departmentId || null },
-      select: { id: true, email: true, fullName: true, role: true, departmentId: true },
+    const created = await prisma.$transaction(async (tx) => {
+      const row = await tx.user.create({
+        data: { email: normalizedEmail, fullName, role, departmentId: departmentId || null },
+        select: { id: true, email: true, fullName: true, role: true, departmentId: true },
+      })
+      await logActivity(tx, {
+        actorId: user.id,
+        entity: 'user',
+        entityId: row.id,
+        action: 'invite',
+        after: { role, departmentId: row.departmentId },
+      })
+      return row
     })
-    await logActivity({ actorId: user.id, entity: 'user', entityId: created.id, action: 'invite', after: { role } })
     return json({ user: created }, 201)
   } catch (err) {
     return serverError('POST /api/users', err)

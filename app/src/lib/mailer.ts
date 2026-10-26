@@ -44,6 +44,10 @@ export async function sendMagicLink({ to, name, magicUrl }: MagicLinkOptions) {
 
   // Dev mode: in ra console nếu không có SMTP config
   if (!process.env.SMTP_HOST) {
+    // Không bao giờ in magic link ra log ở production: ai đọc được log sẽ đăng nhập được
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SMTP chưa được cấu hình (SMTP_HOST)')
+    }
     console.log('\n─── MAGIC LINK (dev mode — SMTP chưa cấu hình) ───')
     console.log(`To:  ${to}`)
     console.log(`URL: ${magicUrl}`)

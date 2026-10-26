@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requestMagicLink } from '@/lib/auth'
 import { z } from 'zod'
+import { guardMutation } from '@/lib/api'
 
 const schema = z.object({
   email: z.string().email('Email không hợp lệ'),
 })
 
 export async function POST(req: NextRequest) {
+  const blocked = guardMutation(req)
+  if (blocked) return blocked
   try {
     const body = await req.json()
     const parsed = schema.safeParse(body)
