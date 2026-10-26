@@ -36,9 +36,9 @@ export async function GET(req: NextRequest) {
     const where = {
       deletedAt: null,
       project: { deletedAt: null },
-      ...(projectId && { projectId }),
-      ...(ownerId && { ownerId }),
-      ...(status && { status }),
+      ...(projectId ? { projectId: projectId } : {}),
+      ...(ownerId ? { ownerId: ownerId } : {}),
+      ...(status ? { status: status } : {}),
     }
     const [data, total] = await Promise.all([
       prisma.task.findMany({

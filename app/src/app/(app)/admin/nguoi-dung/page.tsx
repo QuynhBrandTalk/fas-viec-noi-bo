@@ -8,7 +8,7 @@ import InviteUserForm from './InviteUserForm'
 
 export default async function NguoiDungPage() {
   const user = await getCurrentUser()
-  if (!user || u.role !== 'ADMIN') {
+  if (!user || user.role !== 'ADMIN') {
     redirect('/hom-nay')
   }
 

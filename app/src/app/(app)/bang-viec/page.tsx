@@ -15,7 +15,7 @@ export default async function BangViecPage({ searchParams }: { searchParams: { p
   const [projects, tasks] = await Promise.all([
     prisma.project.findMany({ where: { deletedAt: null }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
     prisma.task.findMany({
-      where: { deletedAt: null, project: { deletedAt: null }, ...(projectId && { projectId }) },
+      where: { deletedAt: null, project: { deletedAt: null }, ...(projectId ? { projectId: projectId } : {}) },
       include: {
         owner: { select: { fullName: true } },
         project: { select: { id: true, name: true, departmentId: true } },

@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
     if (!parsed.success) return badRequest('Tham số không hợp lệ', parsed.error.flatten())
     const { page, departmentId } = parsed.data
 
-    const where = { deletedAt: null, ...(departmentId && { departmentId }) }
+    const where = { deletedAt: null, ...(departmentId ? { departmentId: departmentId } : {}) }
     const [data, total] = await Promise.all([
       prisma.project.findMany({
         where,
